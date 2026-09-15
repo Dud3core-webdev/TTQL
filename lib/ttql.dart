@@ -25,6 +25,7 @@ export 'models/ttql_scope_range.dart';
 export 'models/ttql_script_node.dart';
 export 'models/ttql_select_node.dart';
 export 'models/ttql_suggestion.dart';
+export 'models/ttql_suggestion_kind.dart';
 export 'models/ttql_token.dart';
 export 'models/ttql_unary_logical_expression.dart';
 export 'models/ttql_where_predicate_node.dart';

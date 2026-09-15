@@ -1,8 +1,10 @@
+import 'package:ttql/models/ttql_suggestion_kind.dart';
+
 /// Code completion suggestion item for TTQL editor Intellisense.
 class TtqlSuggestion {
   final String label;
   final String insertText;
-  final String kind; // 'keyword' | 'connection' | 'table' | 'column' | 'operator'
+  final TtqlSuggestionKind kind;
   final String? detail;
 
   const TtqlSuggestion({
@@ -16,7 +18,7 @@ class TtqlSuggestion {
     return {
       'label': label,
       'insertText': insertText,
-      'kind': kind,
+      'kind': kind.name,
       if (detail != null) 'detail': detail,
     };
   }
