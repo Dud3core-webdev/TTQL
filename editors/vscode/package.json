@@ -1,0 +1,74 @@
+{
+  "name": "vscode-ttql",
+  "displayName": "TTQL (TableTalk Query Language)",
+  "description": "Official language support, syntax highlighting, and LSP diagnostics for TTQL cross-database queries.",
+  "version": "1.0.0",
+  "publisher": "tabletalk-io",
+  "icon": "icons/logo.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "license": "MIT",
+  "homepage": "https://tabletalk.io",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tabletalk-io/ttql.git",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/tabletalk-io/ttql/issues"
+  },
+  "keywords": [
+    "ttql",
+    "sql",
+    "database",
+    "federation",
+    "query",
+    "tabletalk"
+  ],
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Snippets"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ttql",
+        "aliases": [
+          "TTQL",
+          "ttql"
+        ],
+        "extensions": [
+          ".ttql"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/logo.png",
+          "dark": "./icons/logo.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ttql",
+        "scopeName": "source.ttql",
+        "path": "./syntaxes/ttql.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  }
+}

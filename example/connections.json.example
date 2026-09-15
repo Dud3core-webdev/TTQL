@@ -1,0 +1,28 @@
+{
+  "connections": [
+    {
+      "id": "ecommerce_pg",
+      "name": "PostgreSQL E-Commerce",
+      "engine": "postgres",
+      "connectionString": "postgres://${PG_USER}:${PG_PASS}@localhost:5432/ecommerce",
+      "schemaOverview": {
+        "customers": ["customer_id", "full_name", "email"]
+      },
+      "mockData": [
+        {"customer_id": "cust_101", "full_name": "Alice Smith", "email": "alice@example.com"}
+      ]
+    },
+    {
+      "id": "inventory_mysql",
+      "name": "MySQL Inventory",
+      "engine": "mysql",
+      "connectionString": "mysql://${MYSQL_USER}:${MYSQL_PASS}@localhost:3306/inventory",
+      "schemaOverview": {
+        "shipments": ["shipment_id", "order_id", "customer_id"]
+      },
+      "mockData": [
+        {"shipment_id": "shp_99", "order_id": "ord_55", "customer_id": "cust_101"}
+      ]
+    }
+  ]
+}

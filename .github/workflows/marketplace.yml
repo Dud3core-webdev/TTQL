@@ -1,0 +1,59 @@
+name: Release VS Code Extension
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish_marketplace:
+        description: 'Publish to VS Code Marketplace'
+        required: true
+        type: boolean
+        default: false
+      publish_openvsx:
+        description: 'Publish to Open VSX'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  package-and-publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Compile Extension
+        run: npm run compile
+
+      - name: Package VSIX
+        run: npx @vscode/vsce package --out ttql.vsix
+
+      - name: Upload VSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttql-vscode-extension
+          path: editors/vscode/ttql.vsix
+
+      - name: Publish to VS Code Marketplace
+        if: ${{ (github.event_name == 'release' || inputs.publish_marketplace == true) && env.VSCE_PAT != '' }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish -p $VSCE_PAT
+
+      - name: Publish to Open VSX Registry
+        if: ${{ (github.event_name == 'release' || inputs.publish_openvsx == true) && env.OVSX_PAT != '' }}
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish -p $OVSX_PAT

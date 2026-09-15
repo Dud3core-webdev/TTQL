@@ -1,0 +1,7 @@
+# Exclude IDE extension and CI from pub.dev archive
+editors/
+.github/
+.vscode/
+*.vsix
+doc/wiki/
+TTQL_COMPILER_WIKI.md

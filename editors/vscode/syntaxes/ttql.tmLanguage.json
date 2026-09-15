@@ -1,0 +1,128 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "TTQL",
+  "scopeName": "source.ttql",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#engine_functions" },
+    { "include": "#environment_access" },
+    { "include": "#constants" },
+    { "include": "#strings" },
+    { "include": "#numbers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.ttql",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.line.double-dash.ttql",
+          "match": "--.*$"
+        },
+        {
+          "name": "comment.block.ttql",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ttql",
+          "match": "\\b(const|select|declare|asyncRun|where|orderBy|limit|return|SELECT|DECLARE|ASYNC_RUN|WHERE|ORDER_BY|LIMIT|CONST)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.ttql",
+          "match": "\\b(is|and|or|not|in|like|between|IS|AND|OR|NOT|IN|LIKE|BETWEEN)\\b"
+        },
+        {
+          "name": "keyword.operator.arrow.ttql",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.comparison.ttql",
+          "match": "(===|!==|==|!=|<=|>=|<|>|=)"
+        },
+        {
+          "name": "keyword.operator.spread.ttql",
+          "match": "\\.\\.\\."
+        }
+      ]
+    },
+    "engine_functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.engine.ttql",
+          "match": "\\b(PostgreSql|MySql|Mongo|Redis|Sqlite|ClickHouse|Mssql|CockroachDb|YugabyteDb|Oracle|Scylla|DuckDb|PlanetScale)\\b"
+        }
+      ]
+    },
+    "environment_access": {
+      "patterns": [
+        {
+          "name": "variable.language.environment.ttql",
+          "match": "\\b(environment|connections|tables|collections)\\b"
+        },
+        {
+          "name": "variable.parameter.ttql",
+          "match": "\\b(row)\\b"
+        },
+        {
+          "name": "entity.name.tag.connection.ttql",
+          "match": "@[a-zA-Z0-9_]+"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.ttql",
+          "match": "\\b(true|false|null|TRUE|FALSE|NULL)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.ttql",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.ttql",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.ttql",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.ttql",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.ttql",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    }
+  }
+}

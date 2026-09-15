@@ -1,0 +1,18 @@
+# Dart & Flutter
+.dart_tool/
+.packages
+build/
+*.bndl
+*.tar.gz
+
+# Node & Editor Extensions
+editors/vscode/node_modules/
+editors/vscode/out/
+editors/vscode/*.vsix
+.vscode-test/
+
+# OS & Temp
+.DS_Store
+Thumbs.db
+*.tmp
+*.log

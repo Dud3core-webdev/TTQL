@@ -1,0 +1,24 @@
+name: ttql
+description: TableTalk Query Language (TTQL) - Sovereign cross-database federated query engine and AST parser.
+version: 1.0.0
+homepage: https://tabletalk.io
+repository: https://github.com/tabletalk-io/ttql
+issue_tracker: https://github.com/tabletalk-io/ttql/issues
+topics:
+  - database
+  - sql
+  - query-engine
+  - federated-query
+  - parser
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  sqlite3: ^2.4.0
+  path: ^1.9.0
+  args: ^2.5.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^3.0.0
