@@ -1,16 +1,18 @@
-# Contributing to TTQL (TableTalk Query Language)
+# Contributing to TTQL
 
-Thank you for your interest in contributing to **TTQL**! We welcome bug reports, feature proposals, language dialect visitors, and compiler enhancements from the open-source community.
+Thank you for contributing to TTQL. We welcome issues, documentation improvements, and pull requests.
 
 ---
 
-## 🛠️ Development Setup
+## Development Setup
 
 ### Prerequisites
+
 - [Dart SDK](https://dart.dev/get-dart) `>=3.0.0 <4.0.0`
 - Git
 
-### Initializing the Workspace
+### Setup
+
 ```bash
 git clone https://github.com/tabletalk-io/ttql.git
 cd ttql
@@ -19,46 +21,43 @@ dart pub get
 
 ---
 
-## 🔬 Testing & Static Analysis
+## Testing & Static Analysis
 
-Before submitting a Pull Request, ensure that all tests pass cleanly and there are zero static analysis warnings:
+Ensure that the static analyzer reports no issues and all tests pass before submitting changes:
 
 ```bash
-# Run static analyzer
+# Static analysis
 dart analyze
 
-# Run unit and integration tests
+# Unit and integration tests
 dart test
 ```
 
 ---
 
-## 🏛️ Compiler Invariants & Architecture Rules
+## Architectural Guidelines
 
-When contributing code to `package:ttql`, please adhere to the following core engineering invariants:
+When submitting code to `ttql`, adhere to the following project conventions:
 
-1. **Strict Physical Separation of Types vs. Logic**:
-   - Do NOT declare AST nodes, interfaces, or DTOs in the same file as business logic services or engine orchestrators.
-   - All AST models belong in `lib/models/`. Services belong in `lib/services/`.
+1. **Separation of Models and Services**:
+   - Keep AST nodes, configuration classes, and data structures in `lib/models/`.
+   - Place engine orchestration, lexical scanning, parsing, and execution logic in `lib/services/`.
 
-2. **100% Read-Only Safety**:
+2. **Read-Only Invariant**:
    - TTQL is strictly a read-only query language.
-   - Any new token or keyword introduced into `ttql_lexer.dart` must check against `TtqlConstants.forbiddenMutationKeywords` to prevent accidental execution of data modification queries (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, etc.).
+   - Any new syntax or keyword additions in `ttql_lexer.dart` must respect `TtqlConstants.forbiddenMutationKeywords` to reject data modification operations (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, etc.).
 
-3. **Concurrency Throttling ($\le 3$ Queries per Batch)**:
-   - Modifications to `ttql_dag_planner.dart` must respect `TtqlConstants.maxConcurrentQueriesPerBatch` (3). Batches of queries dispatched across remote database connections must be chunked to avoid socket exhaustion.
+3. **Concurrency Throttling**:
+   - Changes to the planner (`ttql_dag_planner.dart`) must honor `TtqlConstants.maxConcurrentQueriesPerBatch` (default: 3) to prevent connection pool exhaustion across remote engines.
 
-4. **Zero-UI & Portable Dependencies**:
-   - `package:ttql` must remain a zero-UI, pure Dart package.
-   - Do NOT import `package:flutter` or desktop UI packages into `packages/ttql/lib/`.
+4. **Zero UI Dependencies**:
+   - `ttql` is a pure Dart package with no Flutter or GUI framework dependencies.
 
 ---
 
-## 🔀 Submitting a Pull Request
+## Pull Request Guidelines
 
-1. **Fork & Branch**: Create a feature branch off `main` (e.g., `git checkout -b feature/redis-hash-translator`).
-2. **Commit Hygiene**: Use clear, concise commit messages.
-3. **Tests**: Add unit test coverage in `test/` for any new parser rule or execution step.
-4. **Pull Request**: Open a PR against `tabletalk-io/ttql` with a summary of changes and test evidence.
-
-Thank you for making TTQL the best open-source federated query engine!
+1. **Branching**: Create a feature branch off `main` (`git checkout -b feature/my-feature`).
+2. **Tests**: Add corresponding unit tests in `test/` for new parser rules, planner logic, or CLI features.
+3. **Commit Messages**: Write clear, descriptive commit messages.
+4. **Pull Request**: Open a pull request against `tabletalk-io/ttql` explaining the changes and how they were tested.

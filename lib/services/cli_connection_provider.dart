@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:ttql/models/db_engine_registry.dart';
 import 'package:ttql/models/db_engine_type.dart';
 import 'package:ttql/services/ttql_connection_provider.dart';
 
@@ -77,17 +78,7 @@ class CliConnectionProvider implements TtqlConnectionProvider {
             ? (conn['mockData'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList()
             : null;
 
-        DbEngineType engineType = DbEngineType.sqlite;
-        final rawLower = engineRaw.toLowerCase();
-        for (final val in DbEngineType.values) {
-          if (val.name.toLowerCase() == rawLower ||
-              val.name.toLowerCase().contains(rawLower) ||
-              rawLower.contains(val.name.toLowerCase()) ||
-              val.id.toString() == rawLower) {
-            engineType = val;
-            break;
-          }
-        }
+        final DbEngineType engineType = DbEngineRegistry.tryResolve(engineRaw) ?? DbEngineType.sqlite;
 
         _descriptors[id] = CliConnectionDescriptor(
           id: id,

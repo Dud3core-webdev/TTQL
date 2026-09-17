@@ -4,17 +4,19 @@ import 'dart:io';
 import 'package:ttql/models/ttql_diagnostic.dart';
 import 'package:ttql/models/ttql_environment_context.dart';
 import 'package:ttql/services/cli_connection_provider.dart';
+import 'package:ttql/services/lsp/json_rpc_transport.dart';
+import 'package:ttql/services/lsp/lsp_document_store.dart';
 import 'package:ttql/services/ttql_environment_builder.dart';
 import 'package:ttql/services/ttql_linter.dart';
 
-/// Zero-dependency JSON-RPC 2.0 Language Server Protocol (LSP) implementation for TTQL.
-/// Provides sub-millisecond real-time diagnostics (red squiggly error underlines) to IDEs.
+/// Language Server Protocol (LSP) service for TTQL.
+/// Provides real-time IDE diagnostics, hover documentation, and document synchronization.
+/// Delegates byte-stream framing to [JsonRpcTransport] and buffer tracking to [LspDocumentStore].
 class TtqlLspServer {
-  final Stream<List<int>> inputStream;
-  final IOSink outputSink;
+  final JsonRpcTransport transport;
+  final LspDocumentStore documentStore;
   final String? configPath;
 
-  final Map<String, String> _openDocuments = {};
   TtqlEnvironmentContext? _environmentContext;
   bool _isShutdown = false;
 
@@ -22,9 +24,20 @@ class TtqlLspServer {
     Stream<List<int>>? inputStream,
     IOSink? outputSink,
     this.configPath,
-  })  : inputStream = inputStream ?? stdin,
-        outputSink = outputSink ?? stdout {
+    LspDocumentStore? documentStore,
+  })  : documentStore = documentStore ?? LspDocumentStore(),
+        transport = JsonRpcTransport(
+          inputStream: inputStream ?? stdin,
+          outputSink: outputSink ?? stdout,
+          onMessage: (_) {}, // Assigned in constructor body
+        ) {
+    _initTransport();
     _initEnvironment();
+  }
+
+  void _initTransport() {
+    // Re-bind message callback to handle method dispatch
+    transport.onMessage = _handleJsonRpcMessage;
   }
 
   void _initEnvironment() {
@@ -41,61 +54,8 @@ class TtqlLspServer {
     }
   }
 
-  /// Starts the LSP server loop reading JSON-RPC frames from input stream.
-  Future<void> start() async {
-    final List<int> buffer = [];
-
-    await for (final chunk in inputStream) {
-      buffer.addAll(chunk);
-      _processBuffer(buffer);
-    }
-  }
-
-
-  void _processBuffer(List<int> buffer) {
-    while (buffer.isNotEmpty) {
-      final headerEnd = _findHeaderEnd(buffer);
-      if (headerEnd == -1) break;
-
-      final headerStr = utf8.decode(buffer.sublist(0, headerEnd));
-      final contentLength = _parseContentLength(headerStr);
-      if (contentLength == null) {
-        buffer.clear();
-        break;
-      }
-
-      final bodyStart = headerEnd + 4; // Skip \r\n\r\n
-      if (buffer.length < bodyStart + contentLength) {
-        // Incomplete body payload, wait for next chunk
-        break;
-      }
-
-      final bodyBytes = buffer.sublist(bodyStart, bodyStart + contentLength);
-      buffer.removeRange(0, bodyStart + contentLength);
-
-      final bodyStr = utf8.decode(bodyBytes);
-      _handleJsonRpcMessage(bodyStr);
-    }
-  }
-
-  int _findHeaderEnd(List<int> bytes) {
-    for (int i = 0; i < bytes.length - 3; i++) {
-      if (bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  int? _parseContentLength(String header) {
-    for (final line in header.split('\r\n')) {
-      final parts = line.split(':');
-      if (parts.length == 2 && parts[0].trim().toLowerCase() == 'content-length') {
-        return int.tryParse(parts[1].trim());
-      }
-    }
-    return null;
-  }
+  /// Starts the LSP server loop reading JSON-RPC frames from the transport.
+  Future<void> start() => transport.listen();
 
   void _handleJsonRpcMessage(String rawJson) {
     try {
@@ -117,23 +77,26 @@ class TtqlLspServer {
 
     switch (method) {
       case 'initialize':
-        _sendResponse(id, {
+        transport.sendResponse(id, {
           'capabilities': {
             'textDocumentSync': 1, // Full document synchronization
             'hoverProvider': true,
+            'completionProvider': {
+              'resolveProvider': false,
+              'triggerCharacters': ['.', '(', ' '],
+            },
           }
         });
         break;
 
       case 'initialized':
-        // Server ready signal
         break;
 
       case 'textDocument/didOpen':
         final textDocument = params['textDocument'] as Map<String, dynamic>? ?? {};
         final uri = textDocument['uri'] as String? ?? '';
         final text = textDocument['text'] as String? ?? '';
-        _openDocuments[uri] = text;
+        documentStore.open(uri, text);
         _lintAndPublishDiagnostics(uri, text);
         break;
 
@@ -144,7 +107,7 @@ class TtqlLspServer {
         if (contentChanges.isNotEmpty) {
           final lastChange = contentChanges.last as Map<String, dynamic>;
           final text = lastChange['text'] as String? ?? '';
-          _openDocuments[uri] = text;
+          documentStore.update(uri, text);
           _lintAndPublishDiagnostics(uri, text);
         }
         break;
@@ -152,14 +115,14 @@ class TtqlLspServer {
       case 'textDocument/didSave':
         final textDocument = params['textDocument'] as Map<String, dynamic>? ?? {};
         final uri = textDocument['uri'] as String? ?? '';
-        final text = _openDocuments[uri] ?? (params['text'] as String? ?? '');
+        final text = documentStore.get(uri) ?? (params['text'] as String? ?? '');
         _lintAndPublishDiagnostics(uri, text);
         break;
 
       case 'textDocument/didClose':
         final textDocument = params['textDocument'] as Map<String, dynamic>? ?? {};
         final uri = textDocument['uri'] as String? ?? '';
-        _openDocuments.remove(uri);
+        documentStore.close(uri);
         _clearDiagnostics(uri);
         break;
 
@@ -167,9 +130,13 @@ class TtqlLspServer {
         _handleHover(id, params);
         break;
 
+      case 'textDocument/completion':
+        _handleCompletion(id, params);
+        break;
+
       case 'shutdown':
         _isShutdown = true;
-        _sendResponse(id, null);
+        transport.sendResponse(id, null);
         break;
 
       case 'exit':
@@ -177,7 +144,7 @@ class TtqlLspServer {
 
       default:
         if (id != null) {
-          _sendError(id, -32601, 'Method not found: $method');
+          transport.sendError(id, -32601, 'Method not found: $method');
         }
         break;
     }
@@ -189,14 +156,14 @@ class TtqlLspServer {
 
     final lspDiagnostics = diagnostics.map((d) => _mapToLspDiagnostic(d)).toList();
 
-    _sendNotification('textDocument/publishDiagnostics', {
+    transport.sendNotification('textDocument/publishDiagnostics', {
       'uri': uri,
       'diagnostics': lspDiagnostics,
     });
   }
 
   void _clearDiagnostics(String uri) {
-    _sendNotification('textDocument/publishDiagnostics', {
+    transport.sendNotification('textDocument/publishDiagnostics', {
       'uri': uri,
       'diagnostics': [],
     });
@@ -211,7 +178,7 @@ class TtqlLspServer {
         'start': {'line': startLine, 'character': startCol},
         'end': {'line': startLine, 'character': startCol + 10},
       },
-      'severity': d.severity == 'error' ? 1 : 2, // 1 = Error, 2 = Warning
+      'severity': d.severity == 'error' ? 1 : 2,
       'code': 'ttql_lint',
       'source': 'ttql',
       'message': d.message,
@@ -219,7 +186,7 @@ class TtqlLspServer {
   }
 
   void _handleHover(dynamic id, Map<String, dynamic> params) {
-    _sendResponse(id, {
+    transport.sendResponse(id, {
       'contents': {
         'kind': 'markdown',
         'value': '**TTQL Federated Query**\n\nRuns multi-database analytical queries across PostgreSQL, MongoDB, MySQL, SQLite, and Redis.',
@@ -227,39 +194,151 @@ class TtqlLspServer {
     });
   }
 
-  void _sendResponse(dynamic id, dynamic result) {
-    final payload = {
-      'jsonrpc': '2.0',
-      'id': id,
-      'result': result,
-    };
-    _sendFrame(payload);
+  void _handleCompletion(dynamic id, Map<String, dynamic> params) {
+    final textDocument = params['textDocument'] as Map<String, dynamic>? ?? {};
+    final uri = textDocument['uri'] as String? ?? '';
+    final position = params['position'] as Map<String, dynamic>? ?? {};
+    final lineNum = position['line'] as int? ?? 0;
+    final charNum = position['character'] as int? ?? 0;
+
+    final fullText = documentStore.get(uri) ?? '';
+    final lines = fullText.split('\n');
+    final currentLine = (lineNum >= 0 && lineNum < lines.length) ? lines[lineNum] : '';
+    final linePrefix = charNum <= currentLine.length ? currentLine.substring(0, charNum) : currentLine;
+    final trimmed = linePrefix.trim();
+
+    final List<Map<String, dynamic>> items = [];
+
+    // 1. Connection-scoped table completion (e.g. "pg." or "connections.pg.")
+    if (trimmed.endsWith('.')) {
+      final beforeDot = trimmed.substring(0, trimmed.length - 1).trim();
+      final lastWord = beforeDot.split(RegExp(r'[^a-zA-Z0-9_]')).lastWhere((s) => s.isNotEmpty, orElse: () => '');
+
+      if (_environmentContext != null) {
+        final desc = _environmentContext!.resolveAlias(lastWord);
+        if (desc != null) {
+          for (final table in desc.tableNames) {
+            items.add({
+              'label': table,
+              'kind': 7, // Class / Table
+              'detail': 'Table in ${desc.engineType.name} (${desc.alias})',
+              'insertText': table,
+            });
+          }
+          transport.sendResponse(id, {'isIncomplete': false, 'items': items});
+          return;
+        }
+
+        if (lastWord == 'connections') {
+          for (final connKey in _environmentContext!.connections.keys) {
+            final conn = _environmentContext!.connections[connKey]!;
+            items.add({
+              'label': connKey,
+              'kind': 9, // Module
+              'detail': '${conn.engineType.name} connection',
+              'insertText': connKey,
+            });
+          }
+          transport.sendResponse(id, {'isIncomplete': false, 'items': items});
+          return;
+        }
+      }
+
+      // Method chaining completion after a pipeline call
+      items.addAll(_getPipelineMethodCompletions());
+      transport.sendResponse(id, {'isIncomplete': false, 'items': items});
+      return;
+    }
+
+    // 2. Inside from(...) or join(...) - suggest connection aliases and table refs
+    if (trimmed.contains('from(') || trimmed.contains('Join(') || trimmed.contains('join(')) {
+      if (_environmentContext != null) {
+        for (final entry in _environmentContext!.connections.entries) {
+          items.add({
+            'label': entry.key,
+            'kind': 9, // Module
+            'detail': '${entry.value.engineType.name} connection',
+            'insertText': entry.key,
+          });
+          for (final table in entry.value.tableNames) {
+            items.add({
+              'label': '${entry.key}.$table',
+              'kind': 7, // Table
+              'detail': '${entry.value.engineType.name} table',
+              'insertText': '${entry.key}.$table',
+            });
+          }
+        }
+      }
+    }
+
+    // 3. Inside select(...), groupBy(...), where(...), having(...)
+    items.addAll(_getAggregateFunctionCompletions());
+
+    if (_environmentContext != null) {
+      final seenColumns = <String>{};
+      for (final desc in _environmentContext!.connections.values) {
+        for (final entry in desc.tableColumns.entries) {
+          final table = entry.key;
+          for (final col in entry.value) {
+            if (seenColumns.add(col)) {
+              items.add({
+                'label': col,
+                'kind': 5, // Field
+                'detail': 'Column ($table)',
+                'insertText': col,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Keywords and pipeline methods
+    items.addAll(_getPipelineMethodCompletions());
+    items.addAll(_getKeywordCompletions());
+
+    transport.sendResponse(id, {'isIncomplete': false, 'items': items});
   }
 
-  void _sendError(dynamic id, int code, String message) {
-    final payload = {
-      'jsonrpc': '2.0',
-      'id': id,
-      'error': {'code': code, 'message': message},
-    };
-    _sendFrame(payload);
+  List<Map<String, dynamic>> _getPipelineMethodCompletions() {
+    return [
+      {'label': 'select', 'kind': 2, 'detail': 'Project columns or expressions', 'insertText': r'select($1)'},
+      {'label': 'where', 'kind': 2, 'detail': 'Filter rows with predicate', 'insertText': r'where($1)'},
+      {'label': 'innerJoin', 'kind': 2, 'detail': 'Inner join with another table', 'insertText': r'innerJoin($1, on: $2)'},
+      {'label': 'leftJoin', 'kind': 2, 'detail': 'Left outer join with another table', 'insertText': r'leftJoin($1, on: $2)'},
+      {'label': 'rightJoin', 'kind': 2, 'detail': 'Right outer join with another table', 'insertText': r'rightJoin($1, on: $2)'},
+      {'label': 'fullOuterJoin', 'kind': 2, 'detail': 'Full outer join with another table', 'insertText': r'fullOuterJoin($1, on: $2)'},
+      {'label': 'groupBy', 'kind': 2, 'detail': 'Group results by one or more columns', 'insertText': r'groupBy($1)'},
+      {'label': 'having', 'kind': 2, 'detail': 'Filter grouped aggregate results', 'insertText': r'having($1)'},
+      {'label': 'orderBy', 'kind': 2, 'detail': 'Sort result set (ASC/DESC)', 'insertText': r"orderBy($1, 'ASC')"},
+      {'label': 'limit', 'kind': 2, 'detail': 'Limit number of returned rows', 'insertText': r'limit($1)'},
+      {'label': 'offset', 'kind': 2, 'detail': 'Skip number of rows for pagination', 'insertText': r'offset($1)'},
+      {'label': 'skip', 'kind': 2, 'detail': 'Alias for offset', 'insertText': r'skip($1)'},
+      {'label': 'as', 'kind': 2, 'detail': 'Assign alias to table or column', 'insertText': r"as('$1')"},
+    ];
   }
 
-  void _sendNotification(String method, dynamic params) {
-    final payload = {
-      'jsonrpc': '2.0',
-      'method': method,
-      'params': params,
-    };
-    _sendFrame(payload);
+  List<Map<String, dynamic>> _getAggregateFunctionCompletions() {
+    return [
+      {'label': 'count()', 'kind': 3, 'detail': 'Count total rows', 'insertText': 'count()'},
+      {'label': 'sum(col)', 'kind': 3, 'detail': 'Compute sum of column', 'insertText': r'sum($1)'},
+      {'label': 'avg(col)', 'kind': 3, 'detail': 'Compute average of column', 'insertText': r'avg($1)'},
+      {'label': 'min(col)', 'kind': 3, 'detail': 'Compute minimum of column', 'insertText': r'min($1)'},
+      {'label': 'max(col)', 'kind': 3, 'detail': 'Compute maximum of column', 'insertText': r'max($1)'},
+    ];
   }
 
-  void _sendFrame(Map<String, dynamic> payload) {
-    final jsonStr = jsonEncode(payload);
-    final bytes = utf8.encode(jsonStr);
-    final header = 'Content-Length: ${bytes.length}\r\n\r\n';
-
-    outputSink.write(header);
-    outputSink.add(bytes);
+  List<Map<String, dynamic>> _getKeywordCompletions() {
+    return [
+      {'label': 'from', 'kind': 14, 'detail': 'TTQL root query source', 'insertText': r'from($1)'},
+      {'label': 'const', 'kind': 14, 'detail': 'Declare constant or connection alias', 'insertText': 'const '},
+      {'label': 'environment', 'kind': 14, 'detail': 'Global environment context', 'insertText': 'environment'},
+      {'label': 'ASC', 'kind': 14, 'detail': 'Ascending sort direction', 'insertText': 'ASC'},
+      {'label': 'DESC', 'kind': 14, 'detail': 'Descending sort direction', 'insertText': 'DESC'},
+      {'label': 'AND', 'kind': 14, 'detail': 'Logical conjunction operator', 'insertText': 'AND '},
+      {'label': 'OR', 'kind': 14, 'detail': 'Logical disjunction operator', 'insertText': 'OR '},
+      {'label': 'NOT', 'kind': 14, 'detail': 'Logical negation operator', 'insertText': 'NOT '},
+    ];
   }
 }

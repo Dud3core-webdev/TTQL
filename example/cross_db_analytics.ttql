@@ -2,12 +2,10 @@
 const pg = environment.connections.ecommerce_pg;
 const mysql = environment.connections.inventory_mysql;
 
-select(() => {
-    declare asyncRun(() => {
-        PostgreSql(pg.id, ['customer_id', 'full_name', 'email'], pg.tables['customers']),
-            MySql(mysql.id, ['shipment_id', 'order_id', 'customer_id'], mysql.tables['shipments'])
-    })
-        .where((row) => row.customer_id is 'cust_101')
-})
-    .orderBy(row => row.customer_id, 'asc')
-    .limit(10);
+from(pg.customers)
+  .select('customer_id', 'full_name', 'email')
+  .where(customer_id == 'cust_101')
+  .innerJoin(mysql.shipments, on: 'customer_id')
+  .select('shipment_id', 'order_id')
+  .orderBy(customer_id, 'ASC')
+  .limit(10);

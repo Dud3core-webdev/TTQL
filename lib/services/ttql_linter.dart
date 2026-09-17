@@ -100,13 +100,13 @@ class TtqlLinter {
   void _validateTypesAndSymbols(TtqlScriptNode ast, List<TtqlDiagnostic> diagnostics) {
     final List<TtqlExpression> expressionsToCheck = [];
     for (final q in ast.rootInvocations) {
-      if (q.wherePredicate?.rootExpression != null) {
-        expressionsToCheck.add(q.wherePredicate!.rootExpression!);
+      if (q.wherePredicate != null) {
+        expressionsToCheck.add(q.wherePredicate!.rootExpression);
       }
     }
     for (final j in ast.joins) {
-      if (j.queryInvocation.wherePredicate?.rootExpression != null) {
-        expressionsToCheck.add(j.queryInvocation.wherePredicate!.rootExpression!);
+      if (j.queryInvocation.wherePredicate != null) {
+        expressionsToCheck.add(j.queryInvocation.wherePredicate!.rootExpression);
       }
     }
 

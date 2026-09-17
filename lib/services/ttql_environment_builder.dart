@@ -56,11 +56,19 @@ class TtqlEnvironmentBuilder {
         }
       }
 
+      final Map<String, List<String>> tableColumns = {};
+      for (final entry in schemaOverview.entries) {
+        if (entry.value is List) {
+          tableColumns[entry.key] = (entry.value as List).map((e) => e.toString()).toList();
+        }
+      }
+
       final descriptor = TtqlConnectionDescriptor(
         id: connId,
         alias: safeAlias,
         engineType: engineType,
         tableNames: tableNames,
+        tableColumns: tableColumns,
       );
 
       connections[safeAlias] = descriptor;
@@ -98,26 +106,28 @@ class TtqlEnvironmentBuilder {
     buffer.writeln('  }');
     buffer.writeln('};');
     buffer.writeln('');
-    buffer.writeln('declare function select(closure: () => void): {');
-    buffer.writeln('  InnerJoin(closure: (entity: any) => void): any;');
-    buffer.writeln('  LeftJoin(closure: (entity: any) => void): any;');
-    buffer.writeln('};');
-    buffer.writeln('declare function declare(expression: any): any;');
-    buffer.writeln('declare function asyncRun(closure: () => void): any;');
-    buffer.writeln('declare function PostgreSql(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function MySql(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function MongoDb(connId: string, collection: string): any;');
-    buffer.writeln('declare function Mongo(connId: string, columns: string[], collection: string): any;');
-    buffer.writeln('declare function Sqlite(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function Redis(connId: string, keyPattern: string): any;');
-    buffer.writeln('declare function DuckDb(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function MsSql(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function ClickHouse(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function PlanetScale(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function CockroachDb(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function YugabyteDb(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function Oracle(connId: string, columns: string[], table: string): any;');
-    buffer.writeln('declare function Cassandra(connId: string, columns: string[], table: string): any;');
+    buffer.writeln('interface TtqlPipeline {');
+    buffer.writeln('  as(alias: string): TtqlPipeline;');
+    buffer.writeln('  select(...columns: any[]): TtqlPipeline;');
+    buffer.writeln('  where(predicate: any): TtqlPipeline;');
+    buffer.writeln('  innerJoin(target: any, options?: { on?: any }): TtqlPipeline;');
+    buffer.writeln('  leftJoin(target: any, options?: { on?: any }): TtqlPipeline;');
+    buffer.writeln('  rightJoin(target: any, options?: { on?: any }): TtqlPipeline;');
+    buffer.writeln('  fullOuterJoin(target: any, options?: { on?: any }): TtqlPipeline;');
+    buffer.writeln('  groupBy(...columns: any[]): TtqlPipeline;');
+    buffer.writeln('  having(predicate: any): TtqlPipeline;');
+    buffer.writeln('  orderBy(...columnsOrDirections: any[]): TtqlPipeline;');
+    buffer.writeln('  limit(count: number): TtqlPipeline;');
+    buffer.writeln('  offset(count: number): TtqlPipeline;');
+    buffer.writeln('  skip(count: number): TtqlPipeline;');
+    buffer.writeln('}');
+    buffer.writeln('');
+    buffer.writeln('declare function from(dataSource: any): TtqlPipeline;');
+    buffer.writeln('declare function count(column?: any): any;');
+    buffer.writeln('declare function sum(column: any): any;');
+    buffer.writeln('declare function avg(column: any): any;');
+    buffer.writeln('declare function min(column: any): any;');
+    buffer.writeln('declare function max(column: any): any;');
 
     return buffer.toString();
   }

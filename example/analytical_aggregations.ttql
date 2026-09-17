@@ -1,0 +1,18 @@
+// TableTalk Query Language (TTQL) - Cross-Database Analytical Aggregation
+// Demonstrates GROUP BY, COUNT, SUM, AVG, HAVING, and Pagination
+
+const pg = environment.connections.ecommerce_pg;
+const mysql = environment.connections.inventory_mysql;
+
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id)
+  .groupBy(c.customer_id, c.full_name)
+  .select([
+    c.customer_id as id,
+    c.full_name as customer_name,
+    count() as total_shipments
+  ])
+  .having(total_shipments >= 1)
+  .orderBy(total_shipments, 'DESC')
+  .limit(10)
+  .offset(0);

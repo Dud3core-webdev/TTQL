@@ -1,5 +1,5 @@
 name: ttql
-description: TableTalk Query Language (TTQL) - Sovereign cross-database federated query engine and AST parser.
+description: TableTalk Query Language (TTQL) - Federated cross-database query engine and AST parser in Dart.
 version: 1.0.0
 homepage: https://tabletalk.io
 repository: https://github.com/tabletalk-io/ttql

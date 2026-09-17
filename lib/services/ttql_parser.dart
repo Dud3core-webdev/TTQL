@@ -1,3 +1,4 @@
+import 'package:ttql/models/db_engine_registry.dart';
 import 'package:ttql/models/db_engine_type.dart';
 import 'package:ttql/models/ttql_binary_logical_expression.dart';
 import 'package:ttql/models/ttql_comparison_expression.dart';
@@ -8,9 +9,9 @@ import 'package:ttql/models/ttql_group_expression.dart';
 import 'package:ttql/models/ttql_inferred_type.dart';
 import 'package:ttql/models/ttql_join_node.dart';
 import 'package:ttql/models/ttql_order_by_node.dart';
+import 'package:ttql/models/ttql_projection_item.dart';
 import 'package:ttql/models/ttql_query_invocation_node.dart';
 import 'package:ttql/models/ttql_script_node.dart';
-import 'package:ttql/models/ttql_select_node.dart';
 import 'package:ttql/models/ttql_token.dart';
 import 'package:ttql/models/ttql_unary_logical_expression.dart';
 import 'package:ttql/models/ttql_where_predicate_node.dart';
@@ -38,60 +39,15 @@ class TtqlParser {
       _parseConstDeclaration(_connectionAliases, _constantValues, _constantTypes);
     }
 
-    // 2. Parse root select(() => { ... })
-    _consumeKeyword('select', 'Expected "select" statement.');
-    final selectNode = _parseSelectBlock();
-
-    // 3. Parse optional chained joins: .innerJoin(...) / .leftJoin(...) and modifiers .orderBy(...) / .limit(...)
-    final List<TtqlJoinNode> joins = [];
-    TtqlOrderByNode? orderBy;
-    int? limit;
-
-    while (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-      _advance(); // Consume '.'
-      if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) &&
-          (_peek().value.toLowerCase() == 'innerjoin' ||
-              _peek().value.toLowerCase() == 'leftjoin' ||
-              _peek().value.toLowerCase() == 'rightjoin' ||
-              _peek().value.toLowerCase() == 'fullouterjoin')) {
-        joins.add(_parseJoin());
-      } else if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) &&
-          _peek().value.toLowerCase() == 'orderby') {
-        _advance(); // Consume 'orderBy'
-        orderBy = _parseOrderBy();
-      } else if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) &&
-          _peek().value.toLowerCase() == 'limit') {
-        _advance(); // Consume 'limit'
-        limit = _parseLimit();
-      } else {
-        throw TtqlParseException(
-          'Expected ".innerJoin", ".leftJoin", ".rightJoin", ".fullOuterJoin", ".orderBy", or ".limit", found "${_peek().value}"',
-          line: _peek().line,
-          column: _peek().column,
-        );
-      }
+    // 2. Parse query pipeline starting with 'from'
+    if (_check(TtqlTokenType.keyword) && _peek().value.toLowerCase() == 'from') {
+      return _parseFluentPipeline();
     }
 
-    // Semicolon at end is optional
-    if (_check(TtqlTokenType.punctuation) && _peek().value == ';') {
-      _advance();
-    }
-
-    if (!_isAtEnd() && !_check(TtqlTokenType.eof)) {
-      throw TtqlParseException(
-        'Unexpected trailing token "${_peek().value}"',
-        line: _peek().line,
-        column: _peek().column,
-      );
-    }
-
-    return TtqlScriptNode(
-      declaredConstants: Map.from(_constantValues),
-      connectionAliases: Map.from(_connectionAliases),
-      rootInvocations: selectNode.queryInvocations,
-      joins: joins,
-      orderBy: orderBy,
-      limit: limit,
+    throw TtqlParseException(
+      'Expected "from" statement to start query pipeline, found "${_isAtEnd() ? "EOF" : _peek().value}"',
+      line: _isAtEnd() ? 1 : _peek().line,
+      column: _isAtEnd() ? 1 : _peek().column,
     );
   }
 
@@ -182,273 +138,7 @@ class TtqlParser {
     }
   }
 
-  TtqlSelectNode _parseSelectBlock() {
-    _consumePunctuation('(', 'Expected "(" after "select"');
-    _consumePunctuation('(', 'Expected "() =>" closure in select');
-    _consumePunctuation(')', 'Expected "() =>" closure in select');
-    _consumePunctuation('=>', 'Expected "=>" in select');
-    _consumePunctuation('{', 'Expected "{" opening select body');
 
-    final List<TtqlQueryInvocationNode> invocations = [];
-
-    if (_check(TtqlTokenType.keyword) && _peek().value == 'declare') {
-      _advance(); // Consume declare
-      _consumeKeyword('asyncRun', 'Expected "asyncRun" after "declare"');
-      invocations.addAll(_parseAsyncRun());
-    } else {
-      invocations.add(_parseQueryInvocation());
-    }
-
-    _consumePunctuation('}', 'Expected "}" closing select body');
-    _consumePunctuation(')', 'Expected ")" closing select call');
-
-    return TtqlSelectNode(queryInvocations: invocations);
-  }
-
-  List<TtqlQueryInvocationNode> _parseAsyncRun() {
-    _consumePunctuation('(', 'Expected "(" after asyncRun');
-    _consumePunctuation('(', 'Expected "() =>" closure in asyncRun');
-    _consumePunctuation(')', 'Expected "() =>" closure in asyncRun');
-    _consumePunctuation('=>', 'Expected "=>" in asyncRun');
-    _consumePunctuation('{', 'Expected "{" opening asyncRun body');
-
-    final List<TtqlQueryInvocationNode> queries = [];
-    while (!(_check(TtqlTokenType.punctuation) && _peek().value == '}') && !_isAtEnd()) {
-      queries.add(_parseQueryInvocation());
-      if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
-        _advance();
-      }
-    }
-
-    _consumePunctuation('}', 'Expected "}" closing asyncRun body');
-    _consumePunctuation(')', 'Expected ")" closing asyncRun call');
-
-    TtqlWherePredicateNode? wherePredicate;
-    if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-      _advance(); // Consume '.'
-      if (_check(TtqlTokenType.keyword) && _peek().value == 'where') {
-        _advance(); // Consume 'where'
-        wherePredicate = _parseWherePredicate();
-      }
-    }
-
-    if (wherePredicate != null) {
-      return queries.map((q) {
-        return TtqlQueryInvocationNode(
-          engineType: q.engineType,
-          connectionId: q.connectionId,
-          targetTableOrCollection: q.targetTableOrCollection,
-          projectedColumns: q.projectedColumns,
-          wherePredicate: q.wherePredicate ?? wherePredicate,
-        );
-      }).toList();
-    }
-
-    return queries;
-  }
-
-  TtqlQueryInvocationNode _parseQueryInvocation() {
-    final engineToken = _consumeEngineIdentifier('Expected database engine identifier');
-    final engineType = _resolveEngineType(engineToken.value);
-
-    _consumePunctuation('(', 'Expected "(" after engine name');
-
-    final connId = _parseConnectionExpression();
-
-    _consumePunctuation(',', 'Expected "," after connection argument');
-
-    List<String> projectedColumns = [];
-    String targetTable = '';
-
-    if (engineType == DbEngineType.mongodb || engineType == DbEngineType.redis) {
-      if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
-        _advance();
-        while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
-          if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
-            projectedColumns.add(_advance().value);
-          }
-          if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
-            _advance();
-          }
-        }
-        _consumePunctuation(']', 'Expected "]"');
-        if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
-          _advance();
-        }
-      }
-
-      if (!(_check(TtqlTokenType.punctuation) && _peek().value == ')')) {
-        targetTable = _parseTableReference();
-      }
-
-      if (targetTable.isEmpty && projectedColumns.isNotEmpty) {
-        targetTable = projectedColumns.last;
-      }
-    } else {
-      if (_check(TtqlTokenType.identifier)) {
-        final idToken = _advance();
-        final constVal = _constantValues[idToken.value];
-        if (constVal is List) {
-          projectedColumns = constVal.map((e) => e.toString()).toList();
-        } else if (constVal != null) {
-          projectedColumns = [constVal.toString()];
-        } else {
-          projectedColumns = [idToken.value];
-        }
-        _consumePunctuation(',', 'Expected "," after projected properties');
-      } else {
-        _consumePunctuation('[', 'Expected "[" for projected properties array');
-        while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
-          if (_check(TtqlTokenType.operator) && _peek().value == '...') {
-            _advance();
-            final spreadId = _consume(TtqlTokenType.identifier, 'Expected identifier after "..."');
-            final val = _constantValues[spreadId.value];
-            if (val is List) {
-              projectedColumns.addAll(val.map((e) => e.toString()));
-            } else {
-              throw TtqlParseException('Cannot spread non-list constant "${spreadId.value}" into array');
-            }
-          } else if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
-            projectedColumns.add(_advance().value);
-          }
-          if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
-            _advance();
-          }
-        }
-        _consumePunctuation(']', 'Expected "]"');
-        _consumePunctuation(',', 'Expected "," after projected properties');
-      }
-
-      targetTable = _parseTableReference();
-    }
-
-    _consumePunctuation(')', 'Expected ")" closing query invocation');
-
-    TtqlWherePredicateNode? wherePredicate;
-    if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-      final mark = _current;
-      _advance(); // Consume '.'
-      if (_check(TtqlTokenType.keyword) && _peek().value == 'where') {
-        _advance(); // Consume where
-        wherePredicate = _parseWherePredicate();
-      } else {
-        _current = mark;
-      }
-    }
-
-    return TtqlQueryInvocationNode(
-      engineType: engineType,
-      connectionId: connId,
-      targetTableOrCollection: targetTable,
-      projectedColumns: projectedColumns,
-      wherePredicate: wherePredicate,
-    );
-  }
-
-  String _parseConnectionExpression() {
-    final buffer = StringBuffer();
-    while (!(_check(TtqlTokenType.punctuation) && (_peek().value == ',' || _peek().value == ')')) && !_isAtEnd()) {
-      buffer.write(_advance().value);
-    }
-    return buffer.toString().trim();
-  }
-
-  String _parseTableReference() {
-    if (_check(TtqlTokenType.stringLiteral)) {
-      return _advance().value;
-    }
-
-    final buffer = StringBuffer();
-    if (_check(TtqlTokenType.identifier)) {
-      final firstIdent = _advance().value;
-      if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-        buffer.write(firstIdent);
-        _advance(); // .
-        if (_check(TtqlTokenType.identifier)) {
-          final tablesIdent = _advance().value;
-          if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
-            _advance(); // [
-            if (_check(TtqlTokenType.operator) && _peek().value == '...') {
-              _advance();
-              final id = _consume(TtqlTokenType.identifier, 'Expected identifier after "..."');
-              final spreadVal = _constantValues[id.value];
-              if (spreadVal is! List || spreadVal.length != 1) {
-                throw TtqlParseException('Spreading a table list into tables[...] requires exactly 1 table name.');
-              }
-              _consumePunctuation(']', 'Expected "]"');
-              return spreadVal.first.toString();
-            } else if (_check(TtqlTokenType.stringLiteral)) {
-              final tableName = _advance().value;
-              _consumePunctuation(']', 'Expected "]"');
-              return tableName;
-            } else if (_check(TtqlTokenType.identifier)) {
-              final id = _advance().value;
-              final resolved = _constantValues[id]?.toString() ?? id;
-              _consumePunctuation(']', 'Expected "]"');
-              return resolved;
-            }
-          } else if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-            _advance();
-            if (_check(TtqlTokenType.identifier)) {
-              return _advance().value;
-            }
-          }
-          return tablesIdent;
-        }
-      } else {
-        final constVal = _constantValues[firstIdent];
-        if (constVal != null) {
-          return constVal.toString();
-        }
-        return firstIdent;
-      }
-    }
-    return buffer.toString();
-  }
-
-  TtqlWherePredicateNode _parseWherePredicate() {
-    _consumePunctuation('(', 'Expected "(" after "where"');
-    _consumePunctuation('(', 'Expected "(" in predicate parameter');
-    final entityAlias = _consume(TtqlTokenType.identifier, 'Expected entity parameter name').value;
-    _consumePunctuation(')', 'Expected ")" after predicate parameter');
-    _consumePunctuation('=>', 'Expected "=>" in predicate');
-
-    final rootExpr = _parseLogicalOr(entityAlias);
-    _consumePunctuation(')', 'Expected ")" closing where clause');
-
-    String firstField = '';
-    String firstOp = '=';
-    dynamic firstRight = '';
-    bool firstIsFieldRef = false;
-    String? firstRightEntity;
-
-    void extractFirstComparison(TtqlExpression expr) {
-      if (expr is TtqlComparisonExpression) {
-        firstField = expr.fieldName;
-        firstOp = expr.operator;
-        firstRight = expr.rightOperand;
-        firstIsFieldRef = expr.isRightOperandFieldReference;
-        firstRightEntity = expr.rightFieldEntityAlias;
-      } else if (expr is TtqlBinaryLogicalExpression) {
-        extractFirstComparison(expr.left);
-      } else if (expr is TtqlUnaryLogicalExpression) {
-        extractFirstComparison(expr.operand);
-      } else if (expr is TtqlGroupExpression) {
-        extractFirstComparison(expr.inner);
-      }
-    }
-    extractFirstComparison(rootExpr);
-
-    return TtqlWherePredicateNode(
-      entityAlias: entityAlias,
-      fieldName: firstField,
-      operator: firstOp,
-      rightOperand: firstRight,
-      isRightOperandFieldReference: firstIsFieldRef,
-      rightFieldEntityAlias: firstRightEntity,
-      rootExpression: rootExpr,
-    );
-  }
 
   TtqlExpression _parseLogicalOr(String defaultEntityAlias) {
     var expr = _parseLogicalAnd(defaultEntityAlias);
@@ -503,15 +193,31 @@ class TtqlParser {
     return _parseComparison(defaultEntityAlias);
   }
 
-  TtqlComparisonExpression _parseComparison(String defaultEntityAlias) {
-    final firstIdent = _consume(TtqlTokenType.identifier, 'Expected field or entity identifier');
-    String field;
+  TtqlComparisonExpression _parseComparison(
+    String defaultEntityAlias, {
+    bool isJoinCondition = false,
+    String? defaultRightEntity,
+  }) {
+    final String field;
+    final String? entityAlias;
 
-    if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-      _advance(); // Consume '.'
-      field = _consume(TtqlTokenType.identifier, 'Expected field identifier after "."').value;
+    if (_isAggregateFunctionCall()) {
+      field = _parseAggregateCallString();
+      entityAlias = defaultEntityAlias;
     } else {
-      field = firstIdent.value;
+      final firstToken = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+          ? _advance()
+          : _consume(TtqlTokenType.identifier, 'Expected field or entity identifier');
+      final idParts = <String>[firstToken.value];
+      while (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+        _advance(); // Consume '.'
+        final nextToken = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+            ? _advance()
+            : _consume(TtqlTokenType.identifier, 'Expected field identifier after "."');
+        idParts.add(nextToken.value);
+      }
+      field = idParts.last;
+      entityAlias = idParts.length > 1 ? idParts[idParts.length - 2] : defaultEntityAlias;
     }
 
     String op = '=';
@@ -540,6 +246,7 @@ class TtqlParser {
       }
     } else if (_check(TtqlTokenType.operator)) {
       op = _advance().value;
+      if (op == '==') op = '=';
     }
 
     dynamic rightOperand;
@@ -578,15 +285,24 @@ class TtqlParser {
     } else if (_check(TtqlTokenType.booleanLiteral)) {
       rightOperand = _advance().value == 'true';
     } else if (_check(TtqlTokenType.identifier)) {
-      final rightIdent = _advance();
-      if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+      final rightParts = <String>[_advance().value];
+      while (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
         _advance(); // '.'
-        final subProp = _consume(TtqlTokenType.identifier, 'Expected property after "."');
+        rightParts.add(_consume(TtqlTokenType.identifier, 'Expected property after "."').value);
+      }
+      if (rightParts.length > 1) {
         isFieldRef = true;
-        rightEntity = rightIdent.value;
-        rightOperand = '${rightIdent.value}.${subProp.value}';
+        rightEntity = rightParts[rightParts.length - 2];
+        rightOperand = rightParts.last;
       } else {
-        rightOperand = _constantValues[rightIdent.value] ?? rightIdent.value;
+        final val = rightParts.single;
+        if (isJoinCondition) {
+          isFieldRef = true;
+          rightEntity = defaultRightEntity ?? defaultEntityAlias;
+          rightOperand = val;
+        } else {
+          rightOperand = _constantValues[val] ?? val;
+        }
       }
     }
 
@@ -596,58 +312,11 @@ class TtqlParser {
       rightOperand: rightOperand,
       isRightOperandFieldReference: isFieldRef,
       rightFieldEntityAlias: rightEntity,
-    );
-  }
-
-  TtqlOrderByNode _parseOrderBy() {
-    _consumePunctuation('(', 'Expected "(" after "orderBy"');
-
-    if (_check(TtqlTokenType.punctuation) && _peek().value == '(') {
-      _advance();
-      _consume(TtqlTokenType.identifier, 'Expected parameter in orderBy');
-      _consumePunctuation(')', 'Expected ")" after parameter');
-    } else {
-      _consume(TtqlTokenType.identifier, 'Expected parameter in orderBy');
-    }
-
-    _consumePunctuation('=>', 'Expected "=>" in orderBy closure');
-    final entityToken = _consume(TtqlTokenType.identifier, 'Expected entity in orderBy');
-    final entityAlias = entityToken.value;
-
-    String fieldName;
-    if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
-      _advance();
-      fieldName = _consume(TtqlTokenType.identifier, 'Expected column identifier in orderBy').value;
-    } else if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
-      _advance();
-      if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
-        final raw = _advance().value;
-        fieldName = _constantValues[raw]?.toString() ?? raw;
-      } else {
-        throw TtqlParseException('Expected column string or constant in orderBy bracket access');
-      }
-      _consumePunctuation(']', 'Expected "]"');
-    } else {
-      throw TtqlParseException('Expected "." or "[" in orderBy property access');
-    }
-
-    String direction = 'ASC';
-    if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
-      _advance();
-      if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
-        final raw = _advance().value;
-        final resolved = _constantValues[raw]?.toString() ?? raw;
-        direction = resolved.toUpperCase() == 'DESC' ? 'DESC' : 'ASC';
-      }
-    }
-    _consumePunctuation(')', 'Expected ")" closing orderBy');
-
-    return TtqlOrderByNode(
-      fieldName: fieldName,
-      direction: direction,
       entityAlias: entityAlias,
     );
   }
+
+
 
   int _parseLimit() {
     _consumePunctuation('(', 'Expected "(" after "limit"');
@@ -681,99 +350,7 @@ class TtqlParser {
     return val;
   }
 
-  TtqlJoinNode _parseJoin() {
-    final joinToken = _advance();
-    final joinType = joinToken.value;
 
-    _consumePunctuation('(', 'Expected "(" after "$joinType"');
-    _consumePunctuation('(', 'Expected "(" for join closure parameter');
-    final parentAlias = _consume(TtqlTokenType.identifier, 'Expected join parent parameter').value;
-    _consumePunctuation(')', 'Expected ")" after join closure parameter');
-    _consumePunctuation('=>', 'Expected "=>" in join closure');
-    _consumePunctuation('{', 'Expected "{" opening join body');
-
-    final targetInvocation = _parseQueryInvocation();
-
-    _consumePunctuation('}', 'Expected "}" closing join body');
-    _consumePunctuation(')', 'Expected ")" closing "$joinType" call');
-
-    return TtqlJoinNode(
-      joinType: joinType,
-      parentEntityAlias: parentAlias,
-      queryInvocation: targetInvocation,
-    );
-  }
-
-  TtqlToken _consumeEngineIdentifier(String errorMessage) {
-    if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword)) {
-      final token = _peek();
-      if (_isEngineName(token.value)) {
-        return _advance();
-      }
-    }
-    throw TtqlParseException(errorMessage, line: _peek().line, column: _peek().column);
-  }
-
-  bool _isEngineName(String text) {
-    final lower = text.toLowerCase();
-    return lower == 'postgresql' ||
-        lower == 'postgres' ||
-        lower == 'mysql' ||
-        lower == 'mongodb' ||
-        lower == 'mongo' ||
-        lower == 'sqlite' ||
-        lower == 'redis' ||
-        lower == 'duckdb' ||
-        lower == 'mssql' ||
-        lower == 'clickhouse' ||
-        lower == 'planetscale' ||
-        lower == 'cockroachdb' ||
-        lower == 'cockroach' ||
-        lower == 'yugabytedb' ||
-        lower == 'yugabyte' ||
-        lower == 'oracle' ||
-        lower == 'cassandra' ||
-        lower == 'scylla';
-  }
-
-  DbEngineType _resolveEngineType(String text) {
-    final lower = text.toLowerCase();
-    switch (lower) {
-      case 'postgresql':
-      case 'postgres':
-        return DbEngineType.postgres;
-      case 'mysql':
-        return DbEngineType.mysql;
-      case 'mongodb':
-      case 'mongo':
-        return DbEngineType.mongodb;
-      case 'sqlite':
-        return DbEngineType.sqlite;
-      case 'redis':
-        return DbEngineType.redis;
-      case 'duckdb':
-        return DbEngineType.duckdb;
-      case 'mssql':
-        return DbEngineType.mssql;
-      case 'clickhouse':
-        return DbEngineType.clickhouse;
-      case 'planetscale':
-        return DbEngineType.planetscale;
-      case 'cockroachdb':
-      case 'cockroach':
-        return DbEngineType.cockroachdb;
-      case 'yugabytedb':
-      case 'yugabyte':
-        return DbEngineType.yugabytedb;
-      case 'oracle':
-        return DbEngineType.oracle;
-      case 'cassandra':
-      case 'scylla':
-        return DbEngineType.cassandra;
-      default:
-        throw TtqlParseException('Unknown database engine identifier "$text"');
-    }
-  }
 
   bool _isAtEnd() => _peek().type == TtqlTokenType.eof;
   TtqlToken _peek() => tokens[_current];
@@ -811,5 +388,987 @@ class TtqlParser {
   TtqlToken _consumeIdentifier(String id, String errorMessage) {
     if (_check(TtqlTokenType.identifier) && _peek().value == id) return _advance();
     throw TtqlParseException(errorMessage, line: _peek().line, column: _peek().column);
+  }
+
+  // ===========================================================================
+  // TTQL Fluent Pipeline Implementation
+  // ===========================================================================
+
+  TtqlScriptNode _parseFluentPipeline() {
+    _consumeKeyword('from', 'Expected "from" statement.');
+    _consumePunctuation('(', 'Expected "(" after "from".');
+
+    final primaryRef = _parseFluentTableRef();
+    _consumePunctuation(')', 'Expected ")" closing "from(...)".');
+
+    final primaryTable = primaryRef.tableName;
+    final Map<String, String> entityAliases = {};
+    entityAliases[primaryTable] = primaryTable;
+    if (primaryRef.connectionId != null) {
+      entityAliases['${primaryRef.connectionId}.$primaryTable'] = primaryTable;
+      entityAliases[primaryRef.connectionId!] = primaryTable;
+    }
+    if (primaryRef.alias != null) {
+      entityAliases[primaryRef.alias!] = primaryTable;
+    }
+    if (primaryTable.isNotEmpty) {
+      entityAliases[primaryTable[0].toLowerCase()] = primaryTable;
+    }
+
+    final primaryEngine = _resolveEngineForConnection(primaryRef.connectionId);
+    final List<String> rootColumns = [];
+    TtqlWherePredicateNode? rootWhere;
+
+    final List<_FluentJoinBuilder> joinBuilders = [];
+    final List<TtqlOrderByNode> orderBys = [];
+    int? limit;
+    int? offset;
+    final List<String> groupByColumns = [];
+    TtqlExpression? havingPredicate;
+    final List<TtqlProjectionItem> queryProjections = [];
+
+    // Index of the currently chained join stage, or null if targeting the root table
+    int? currentJoinIndex;
+
+    while (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+      _advance(); // Consume '.'
+
+      final methodToken = _peek();
+      final methodName = methodToken.value.toLowerCase();
+
+      if (methodName == 'as') {
+        _advance();
+        _consumePunctuation('(', 'Expected "(" after "as"');
+        String alias;
+        if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
+          alias = _advance().value;
+        } else {
+          throw TtqlParseException('Expected alias identifier or string in .as(...)', line: _peek().line, column: _peek().column);
+        }
+        _consumePunctuation(')', 'Expected ")" after alias in .as(...)');
+
+        if (currentJoinIndex == null) {
+          entityAliases[alias] = primaryTable;
+        } else {
+          final jb = joinBuilders[currentJoinIndex];
+          entityAliases[alias] = jb.targetTable;
+          jb.alias = alias;
+        }
+      } else if (methodName == 'select') {
+        _advance();
+        final projs = _parseFluentSelectProjections(primaryTable);
+        queryProjections.addAll(projs);
+
+        for (final p in projs) {
+          final ent = p is TtqlColumnProjection
+              ? p.entityAlias
+              : (p is TtqlAggregateProjection ? p.entityAlias : null);
+          for (final refCol in p.referencedColumns) {
+            if (ent != null) {
+              if (ent == primaryTable || entityAliases[ent] == primaryTable) {
+                if (!rootColumns.contains(refCol)) rootColumns.add(refCol);
+              } else {
+                final matched = entityAliases[ent] ?? ent;
+                bool found = false;
+                for (final jb in joinBuilders) {
+                  if (jb.targetTable == matched || jb.alias == matched) {
+                    if (!jb.projectedColumns.contains(refCol)) jb.projectedColumns.add(refCol);
+                    found = true;
+                    break;
+                  }
+                }
+                if (!found && currentJoinIndex != null) {
+                  if (!joinBuilders[currentJoinIndex].projectedColumns.contains(refCol)) {
+                    joinBuilders[currentJoinIndex].projectedColumns.add(refCol);
+                  }
+                } else if (!found) {
+                  if (!rootColumns.contains(refCol)) rootColumns.add(refCol);
+                }
+              }
+            } else {
+              // Unqualified column: assign to currently chained join stage if present, else root
+              if (currentJoinIndex == null) {
+                if (!rootColumns.contains(refCol)) rootColumns.add(refCol);
+              } else {
+                if (!joinBuilders[currentJoinIndex].projectedColumns.contains(refCol)) {
+                  joinBuilders[currentJoinIndex].projectedColumns.add(refCol);
+                }
+              }
+            }
+          }
+        }
+      } else if (methodName == 'where') {
+        _advance();
+        final whereNode = _parseFluentWhere(primaryTable);
+
+        _routeWherePredicate(
+          whereNode,
+          primaryTable: primaryTable,
+          entityAliases: entityAliases,
+          currentJoinIndex: currentJoinIndex,
+          joinBuilders: joinBuilders,
+          onRouteRoot: (expr) {
+            if (rootWhere == null) {
+              rootWhere = TtqlWherePredicateNode(
+                entityAlias: whereNode.entityAlias,
+                rootExpression: expr,
+              );
+            } else {
+              rootWhere = TtqlWherePredicateNode(
+                entityAlias: rootWhere!.entityAlias,
+                rootExpression: TtqlBinaryLogicalExpression(
+                  left: rootWhere!.rootExpression,
+                  operator: 'AND',
+                  right: expr,
+                ),
+              );
+            }
+          },
+          onRouteJoin: (joinIdx, expr) {
+            final jb = joinBuilders[joinIdx];
+            if (jb.filterCondition == null) {
+              jb.filterCondition = expr;
+            } else {
+              jb.filterCondition = TtqlBinaryLogicalExpression(
+                left: jb.filterCondition!,
+                operator: 'AND',
+                right: expr,
+              );
+            }
+          },
+        );
+      } else if (methodName == 'innerjoin' ||
+          methodName == 'leftjoin' ||
+          methodName == 'rightjoin' ||
+          methodName == 'fullouterjoin' ||
+          methodName == 'join') {
+        final joinBuilder = _parseFluentJoin(primaryTable, entityAliases);
+        joinBuilders.add(joinBuilder);
+        currentJoinIndex = joinBuilders.length - 1;
+      } else if (methodName == 'groupby') {
+        _advance();
+        final cols = _parseGroupByColumns(primaryTable);
+        groupByColumns.addAll(cols);
+        for (final g in cols) {
+          final parts = g.split('.');
+          final col = parts.last;
+          final ent = parts.length > 1 ? parts.first : null;
+          if (ent != null) {
+            if (ent == primaryTable || entityAliases[ent] == primaryTable) {
+              if (!rootColumns.contains(col)) rootColumns.add(col);
+            } else {
+              final matched = entityAliases[ent] ?? ent;
+              for (final jb in joinBuilders) {
+                if (jb.targetTable == matched || jb.alias == matched) {
+                  if (!jb.projectedColumns.contains(col)) jb.projectedColumns.add(col);
+                  break;
+                }
+              }
+            }
+          } else {
+            if (currentJoinIndex == null) {
+              if (!rootColumns.contains(col)) rootColumns.add(col);
+            } else {
+              if (!joinBuilders[currentJoinIndex].projectedColumns.contains(col)) {
+                joinBuilders[currentJoinIndex].projectedColumns.add(col);
+              }
+            }
+          }
+        }
+      } else if (methodName == 'having') {
+        _advance();
+        final havingNode = _parseFluentWhere(primaryTable);
+        if (havingPredicate == null) {
+          havingPredicate = havingNode.rootExpression;
+        } else {
+          havingPredicate = TtqlBinaryLogicalExpression(
+            left: havingPredicate,
+            operator: 'AND',
+            right: havingNode.rootExpression,
+          );
+        }
+      } else if (methodName == 'orderby') {
+        _advance();
+        final orders = _parseFluentOrderByList(primaryTable);
+        orderBys.addAll(orders);
+      } else if (methodName == 'limit') {
+        _advance();
+        limit = _parseLimit();
+      } else if (methodName == 'offset' || methodName == 'skip') {
+        _advance();
+        offset = _parseLimit();
+      } else {
+        throw TtqlParseException(
+          'Expected ".select", ".where", ".innerJoin", ".leftJoin", ".rightJoin", ".fullOuterJoin", ".groupBy", ".having", ".orderBy", ".limit", or ".offset", found "${methodToken.value}"',
+          line: methodToken.line,
+          column: methodToken.column,
+        );
+      }
+    }
+
+    if (_check(TtqlTokenType.punctuation) && _peek().value == ';') {
+      _advance();
+    }
+
+    if (!_isAtEnd() && !_check(TtqlTokenType.eof)) {
+      throw TtqlParseException(
+        'Unexpected trailing token "${_peek().value}"',
+        line: _peek().line,
+        column: _peek().column,
+      );
+    }
+
+    final rootInvocation = TtqlQueryInvocationNode(
+      engineType: primaryEngine,
+      connectionId: primaryRef.connectionId ?? 'default',
+      targetTableOrCollection: primaryTable,
+      projectedColumns: rootColumns,
+      wherePredicate: rootWhere,
+    );
+
+    return TtqlScriptNode(
+      declaredConstants: Map.from(_constantValues),
+      connectionAliases: Map.from(_connectionAliases),
+      rootInvocations: [rootInvocation],
+      joins: joinBuilders.map((b) => b.build()).toList(),
+      orderBys: orderBys,
+      limit: limit,
+      offset: offset,
+      groupByColumns: groupByColumns,
+      havingPredicate: havingPredicate,
+      projections: queryProjections,
+    );
+  }
+
+  _FluentTableRef _parseFluentTableRef() {
+    String? connId;
+    String tableName = '';
+    String? alias;
+
+    if (_check(TtqlTokenType.stringLiteral)) {
+      tableName = _advance().value;
+    } else if (_check(TtqlTokenType.identifier)) {
+      final firstId = _advance().value;
+      if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+        _advance(); // consume '.'
+        connId = firstId;
+        if (_check(TtqlTokenType.identifier) && _peek().value == 'tables') {
+          _advance(); // consume 'tables'
+          if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+            _advance(); // consume '.'
+            tableName = _consume(TtqlTokenType.identifier, 'Expected table name after tables.').value;
+          } else if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
+            _advance(); // consume '['
+            if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
+              tableName = _advance().value;
+            }
+            _consumePunctuation(']', 'Expected "]" closing table access');
+          }
+        } else {
+          tableName = _consume(TtqlTokenType.identifier, 'Expected table name after connection alias').value;
+        }
+      } else {
+        tableName = firstId;
+      }
+    } else {
+      throw TtqlParseException('Expected table reference in from() or join()', line: _peek().line, column: _peek().column);
+    }
+
+    // Check for inline .as('alias')
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+      final mark = _current;
+      _advance(); // consume '.'
+      if (_check(TtqlTokenType.identifier) && _peek().value.toLowerCase() == 'as') {
+        _advance(); // consume 'as'
+        _consumePunctuation('(', 'Expected "(" after .as');
+        if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
+          alias = _advance().value;
+        }
+        _consumePunctuation(')', 'Expected ")" after alias in .as(...)');
+      } else {
+        _current = mark;
+      }
+    }
+
+    // Check for "as alias" or ", as: 'alias'"
+    if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) && _peek().value.toLowerCase() == 'as') {
+      _advance(); // consume 'as'
+      alias = _consume(TtqlTokenType.identifier, 'Expected alias identifier after "as"').value;
+    } else if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+      final mark = _current;
+      _advance(); // consume ','
+      if ((_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword)) && _peek().value.toLowerCase() == 'as') {
+        _advance();
+        if (_check(TtqlTokenType.punctuation) && _peek().value == ':') {
+          _advance();
+          if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
+            alias = _advance().value;
+          }
+        } else {
+          _current = mark;
+        }
+      } else {
+        _current = mark; // rewind if not "as:"
+      }
+    }
+
+    return _FluentTableRef(connectionId: connId, tableName: tableName, alias: alias);
+  }
+
+  DbEngineType _resolveEngineForConnection(String? connectionName) {
+    if (connectionName == null) {
+      return DbEngineType.postgres;
+    }
+    final targetName = _connectionAliases[connectionName] ?? connectionName;
+
+    if (environmentContext != null) {
+      final desc = environmentContext!.resolveAlias(targetName) ?? environmentContext!.resolveAlias(connectionName);
+      if (desc != null) {
+        return desc.engineType;
+      }
+    }
+
+    final direct = DbEngineRegistry.tryResolve(connectionName) ?? DbEngineRegistry.tryResolve(targetName);
+    if (direct != null) {
+      return direct;
+    }
+
+    final parts = targetName.split(RegExp(r'[^a-zA-Z0-9]'));
+    for (final part in parts.reversed) {
+      final resolved = DbEngineRegistry.tryResolve(part);
+      if (resolved != null) {
+        return resolved;
+      }
+    }
+
+    return DbEngineType.postgres;
+  }
+
+  TtqlWherePredicateNode _parseFluentWhere(String defaultEntityAlias) {
+    _consumePunctuation('(', 'Expected "(" after "where"');
+
+    String entityAlias = defaultEntityAlias;
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '(') {
+      if (_isArrowFunction()) {
+        _advance(); // consume '('
+        entityAlias = _consume(TtqlTokenType.identifier, 'Expected parameter in where').value;
+        _consumePunctuation(')', 'Expected ")" after parameter');
+        _consumePunctuation('=>', 'Expected "=>" in where');
+      }
+    } else if (_check(TtqlTokenType.identifier) && _current + 1 < tokens.length && tokens[_current + 1].value == '=>') {
+      entityAlias = _advance().value;
+      _advance(); // consume '=>'
+    }
+
+    final rootExpr = _parseLogicalOr(entityAlias);
+    _consumePunctuation(')', 'Expected ")" closing where clause');
+
+    return TtqlWherePredicateNode(
+      entityAlias: entityAlias,
+      rootExpression: rootExpr,
+    );
+  }
+
+  bool _isArrowFunction() {
+    if (_current + 3 < tokens.length) {
+      return tokens[_current].value == '(' &&
+          tokens[_current + 1].type == TtqlTokenType.identifier &&
+          tokens[_current + 2].value == ')' &&
+          tokens[_current + 3].value == '=>';
+    }
+    return false;
+  }
+
+  bool _isAggregateFunctionCall() {
+    if (_isAtEnd()) return false;
+    final val = _peek().value.toLowerCase();
+    if (val == 'count' || val == 'sum' || val == 'avg' || val == 'min' || val == 'max') {
+      if (_current + 1 < tokens.length && tokens[_current + 1].value == '(') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _parseAggregateCallString() {
+    final fnToken = _advance();
+    final fnName = fnToken.value.toUpperCase();
+    _consumePunctuation('(', 'Expected "(" after aggregate function');
+    String arg = '*';
+    if (!(_check(TtqlTokenType.punctuation) && _peek().value == ')')) {
+      if (_check(TtqlTokenType.operator) && _peek().value == '*') {
+        _advance();
+        arg = '*';
+      } else if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.keyword)) {
+        final firstId = _advance().value;
+        if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+          _advance();
+          final secondId = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+              ? _advance().value
+              : _consume(TtqlTokenType.identifier, 'Expected column name after "."').value;
+          arg = '"$secondId"';
+        } else {
+          arg = '"$firstId"';
+        }
+      }
+    }
+    _consumePunctuation(')', 'Expected ")" after aggregate argument');
+    return '$fnName($arg)';
+  }
+
+  List<TtqlProjectionItem> _parseFluentSelectProjections(String defaultEntity) {
+    _consumePunctuation('(', 'Expected "(" after select');
+    final List<TtqlProjectionItem> items = [];
+
+    if (_check(TtqlTokenType.punctuation) && _peek().value == ')') {
+      _advance();
+      return items;
+    }
+
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
+      _advance(); // consume '['
+      while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
+        if (_check(TtqlTokenType.operator) && _peek().value == '...') {
+          _advance();
+          final id = _consume(TtqlTokenType.identifier, 'Expected identifier after "..."').value;
+          final val = _constantValues[id];
+          if (val is List) {
+            for (final v in val) {
+              items.add(TtqlColumnProjection(columnName: v.toString()));
+            }
+          }
+        } else {
+          items.add(_parseSingleProjectionItem(defaultEntity));
+        }
+        if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+          _advance();
+        }
+      }
+      _consumePunctuation(']', 'Expected "]" closing select array');
+    } else {
+      while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+        items.add(_parseSingleProjectionItem(defaultEntity));
+        if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+          _advance();
+        } else {
+          break;
+        }
+      }
+    }
+
+    _consumePunctuation(')', 'Expected ")" closing select(...)');
+    return items;
+  }
+
+  TtqlProjectionItem _parseSingleProjectionItem(String defaultEntity) {
+    if (_isAggregateFunctionCall()) {
+      final fnToken = _advance();
+      final fnName = fnToken.value.toUpperCase();
+      _consumePunctuation('(', 'Expected "(" after aggregate function');
+      String? argCol;
+      String? entAlias;
+      if (!(_check(TtqlTokenType.punctuation) && _peek().value == ')')) {
+        if (_check(TtqlTokenType.operator) && _peek().value == '*') {
+          _advance();
+        } else if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.keyword)) {
+          final first = _advance().value;
+          if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+            _advance();
+            final second = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+                ? _advance().value
+                : _consume(TtqlTokenType.identifier, 'Expected column name after "."').value;
+            entAlias = first;
+            argCol = second;
+          } else {
+            argCol = first;
+          }
+        }
+      }
+      _consumePunctuation(')', 'Expected ")" after aggregate argument');
+
+      String? alias;
+      if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) && _peek().value.toLowerCase() == 'as') {
+        _advance(); // 'as'
+        if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.stringLiteral)) {
+          alias = _advance().value;
+        }
+      } else if (_check(TtqlTokenType.punctuation) && _peek().value == ':') {
+        _advance(); // ':'
+        if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.stringLiteral)) {
+          alias = _advance().value;
+        }
+      }
+
+      return TtqlAggregateProjection(
+        functionName: fnName,
+        argumentColumn: argCol,
+        entityAlias: entAlias,
+        alias: alias,
+      );
+    }
+
+    // Arrow function: o => o.status
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '(' && _isArrowFunction()) {
+      _advance(); // '('
+      final param = _consume(TtqlTokenType.identifier, 'Expected parameter').value;
+      _consumePunctuation(')', 'Expected ")"');
+      _consumePunctuation('=>', 'Expected "=>"');
+      _consumeIdentifier(param, 'Expected parameter');
+      _consumePunctuation('.', 'Expected "."');
+      final col = _consume(TtqlTokenType.identifier, 'Expected column name').value;
+      return TtqlColumnProjection(columnName: col, entityAlias: param);
+    } else if (_check(TtqlTokenType.identifier) && _current + 1 < tokens.length && tokens[_current + 1].value == '=>') {
+      final param = _advance().value;
+      _advance(); // '=>'
+      _consumeIdentifier(param, 'Expected parameter');
+      _consumePunctuation('.', 'Expected "."');
+      final col = _consume(TtqlTokenType.identifier, 'Expected column name').value;
+      return TtqlColumnProjection(columnName: col, entityAlias: param);
+    }
+
+    // String literal: 'col'
+    if (_check(TtqlTokenType.stringLiteral)) {
+      final col = _advance().value;
+      String? alias;
+      if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) && _peek().value.toLowerCase() == 'as') {
+        _advance(); // as
+        alias = _advance().value;
+      }
+      return TtqlColumnProjection(columnName: col, alias: alias);
+    }
+
+    // Identifier or keyword: col or entity.col
+    if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword)) {
+      final first = _advance().value;
+      String? entAlias;
+      String colName = first;
+
+      if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+        _advance();
+        entAlias = first;
+        colName = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+            ? _advance().value
+            : _consume(TtqlTokenType.identifier, 'Expected column name after "."').value;
+      }
+
+      String? alias;
+      if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) && _peek().value.toLowerCase() == 'as') {
+        _advance(); // as
+        alias = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.stringLiteral))
+            ? _advance().value
+            : null;
+      }
+
+      return TtqlColumnProjection(
+        columnName: colName,
+        entityAlias: entAlias,
+        alias: alias,
+      );
+    }
+
+    throw TtqlParseException(
+      'Expected column projection or aggregate function in select()',
+      line: _peek().line,
+      column: _peek().column,
+    );
+  }
+
+  List<String> _parseGroupByColumns(String defaultEntity) {
+    _consumePunctuation('(', 'Expected "(" after groupBy');
+    final List<String> groupCols = [];
+
+    if (_check(TtqlTokenType.punctuation) && _peek().value == ')') {
+      _advance();
+      return groupCols;
+    }
+
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
+      _advance(); // '['
+      while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
+        groupCols.add(_parseSingleGroupCol(defaultEntity));
+        if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+          _advance();
+        }
+      }
+      _consumePunctuation(']', 'Expected "]" closing groupBy array');
+    } else {
+      while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+        groupCols.add(_parseSingleGroupCol(defaultEntity));
+        if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+          _advance();
+        } else {
+          break;
+        }
+      }
+    }
+
+    _consumePunctuation(')', 'Expected ")" closing groupBy(...)');
+    return groupCols;
+  }
+
+  String _parseSingleGroupCol(String defaultEntity) {
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '(' && _isArrowFunction()) {
+      _advance(); // '('
+      final param = _consume(TtqlTokenType.identifier, 'Expected parameter in arrow function').value;
+      _consumePunctuation(')', 'Expected ")"');
+      _consumePunctuation('=>', 'Expected "=>"');
+      _consumeIdentifier(param, 'Expected parameter access in arrow function');
+      _consumePunctuation('.', 'Expected "."');
+      final col = _consume(TtqlTokenType.identifier, 'Expected column name in groupBy').value;
+      return '$param.$col';
+    } else if (_check(TtqlTokenType.identifier) && _current + 1 < tokens.length && tokens[_current + 1].value == '=>') {
+      final param = _advance().value;
+      _advance(); // '=>'
+      _consumeIdentifier(param, 'Expected parameter access in arrow function');
+      _consumePunctuation('.', 'Expected "."');
+      final col = _consume(TtqlTokenType.identifier, 'Expected column name in groupBy').value;
+      return '$param.$col';
+    } else if (_check(TtqlTokenType.stringLiteral)) {
+      return _advance().value;
+    } else if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword)) {
+      final first = _advance().value;
+      if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+        _advance();
+        final second = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+            ? _advance().value
+            : _consume(TtqlTokenType.identifier, 'Expected column name after "."').value;
+        return '$first.$second';
+      }
+      return first;
+    } else {
+      throw TtqlParseException('Expected column name or arrow function in groupBy');
+    }
+  }
+
+  List<TtqlOrderByNode> _parseFluentOrderByList(String defaultEntity) {
+    _consumePunctuation('(', 'Expected "(" after orderBy');
+    final List<TtqlOrderByNode> orderBys = [];
+
+    while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+      if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
+        _advance(); // '['
+        final node = _parseSingleOrderBy(defaultEntity);
+        _consumePunctuation(']', 'Expected "]" closing orderBy element');
+        orderBys.add(node);
+      } else {
+        final node = _parseSingleOrderBy(defaultEntity);
+        orderBys.add(node);
+      }
+      if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+        _advance();
+      } else {
+        break;
+      }
+    }
+
+    _consumePunctuation(')', 'Expected ")" closing orderBy');
+    return orderBys;
+  }
+
+  TtqlOrderByNode _parseSingleOrderBy(String defaultEntity) {
+    String entityAlias = defaultEntity;
+    String fieldName;
+
+    if (_check(TtqlTokenType.punctuation) && _peek().value == '(' && _isArrowFunction()) {
+      _advance(); // '('
+      entityAlias = _consume(TtqlTokenType.identifier, 'Expected parameter in orderBy').value;
+      _consumePunctuation(')', 'Expected ")"');
+      _consumePunctuation('=>', 'Expected "=>"');
+      _consumeIdentifier(entityAlias, 'Expected entity parameter in property access');
+      _consumePunctuation('.', 'Expected "."');
+      fieldName = _consume(TtqlTokenType.identifier, 'Expected column name in orderBy').value;
+    } else if (_check(TtqlTokenType.identifier) && _current + 1 < tokens.length && tokens[_current + 1].value == '=>') {
+      entityAlias = _advance().value;
+      _advance(); // '=>'
+      _consumeIdentifier(entityAlias, 'Expected entity parameter in property access');
+      _consumePunctuation('.', 'Expected "."');
+      fieldName = _consume(TtqlTokenType.identifier, 'Expected column name in orderBy').value;
+    } else if (_check(TtqlTokenType.stringLiteral)) {
+      fieldName = _advance().value;
+    } else if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword)) {
+      final firstId = _advance().value;
+      if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+        _advance();
+        final secondId = (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword))
+            ? _advance().value
+            : _consume(TtqlTokenType.identifier, 'Expected column name after "."').value;
+        if (_check(TtqlTokenType.punctuation) && _peek().value == '.') {
+          _advance();
+          final thirdId = _consume(TtqlTokenType.identifier, 'Expected column name after "."').value;
+          entityAlias = secondId;
+          fieldName = thirdId;
+        } else {
+          entityAlias = firstId;
+          fieldName = secondId;
+        }
+      } else {
+        fieldName = firstId;
+      }
+    } else {
+      throw TtqlParseException('Expected column name or arrow function in orderBy');
+    }
+
+    String direction = 'ASC';
+    if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+      final next = _peekNext();
+      final valUpper = next.value.toUpperCase();
+      if (valUpper == 'ASC' || valUpper == 'DESC') {
+        _advance(); // consume ','
+        final dirToken = _advance();
+        final raw = dirToken.value;
+        final resolved = _constantValues[raw]?.toString() ?? raw;
+        direction = resolved.toUpperCase() == 'DESC' ? 'DESC' : 'ASC';
+      }
+    }
+
+    return TtqlOrderByNode(
+      fieldName: fieldName,
+      direction: direction,
+      entityAlias: entityAlias,
+    );
+  }
+
+  _FluentJoinBuilder _parseFluentJoin(String primaryTable, Map<String, String> entityAliases) {
+    final joinToken = _advance();
+    final rawMethod = joinToken.value.toLowerCase();
+    final String joinType;
+    if (rawMethod == 'leftjoin') {
+      joinType = 'leftJoin';
+    } else if (rawMethod == 'rightjoin') {
+      joinType = 'rightJoin';
+    } else if (rawMethod == 'fullouterjoin') {
+      joinType = 'fullOuterJoin';
+    } else {
+      joinType = 'innerJoin';
+    }
+
+    _consumePunctuation('(', 'Expected "(" after "$rawMethod"');
+    final targetRef = _parseFluentTableRef();
+    final targetTable = targetRef.tableName;
+
+    entityAliases[targetTable] = targetTable;
+    if (targetRef.connectionId != null) {
+      entityAliases['${targetRef.connectionId}.$targetTable'] = targetTable;
+      entityAliases[targetRef.connectionId!] = targetTable;
+    }
+    if (targetRef.alias != null) {
+      entityAliases[targetRef.alias!] = targetTable;
+    }
+    if (targetTable.isNotEmpty) {
+      entityAliases[targetTable[0].toLowerCase()] = targetTable;
+    }
+
+    _consumePunctuation(',', 'Expected "," before "on:" join condition');
+
+    if ((_check(TtqlTokenType.keyword) || _check(TtqlTokenType.identifier)) && _peek().value.toLowerCase() == 'on') {
+      _advance();
+      if (_check(TtqlTokenType.punctuation) && _peek().value == ':') {
+        _advance();
+      }
+    }
+
+    TtqlComparisonExpression joinComparison;
+
+    if (_check(TtqlTokenType.stringLiteral)) {
+      final col = _advance().value;
+      joinComparison = TtqlComparisonExpression(
+        fieldName: col,
+        operator: '=',
+        rightOperand: col,
+        isRightOperandFieldReference: true,
+        rightFieldEntityAlias: primaryTable,
+        entityAlias: targetTable,
+      );
+    } else if (_check(TtqlTokenType.identifier) &&
+        (_peekNext().value == ')' || _peekNext().value == ',')) {
+      final col = _advance().value;
+      joinComparison = TtqlComparisonExpression(
+        fieldName: col,
+        operator: '=',
+        rightOperand: col,
+        isRightOperandFieldReference: true,
+        rightFieldEntityAlias: primaryTable,
+        entityAlias: targetTable,
+      );
+    } else {
+      var comp = _parseComparison(
+        targetTable,
+        isJoinCondition: true,
+        defaultRightEntity: primaryTable,
+      );
+
+      final leftQualifier = comp.entityAlias;
+      final rightQualifier = comp.rightFieldEntityAlias;
+
+      if (leftQualifier != null &&
+          (leftQualifier == primaryTable || entityAliases[leftQualifier] == primaryTable) &&
+          rightQualifier != null &&
+          (rightQualifier == targetTable || entityAliases[rightQualifier] == targetTable)) {
+        comp = TtqlComparisonExpression(
+          fieldName: comp.rightOperand.toString().split('.').last,
+          operator: comp.operator,
+          rightOperand: comp.fieldName,
+          isRightOperandFieldReference: true,
+          rightFieldEntityAlias: primaryTable,
+          entityAlias: targetTable,
+        );
+      } else {
+        joinComparison = TtqlComparisonExpression(
+          fieldName: comp.fieldName,
+          operator: comp.operator,
+          rightOperand: comp.rightOperand,
+          isRightOperandFieldReference: true,
+          rightFieldEntityAlias: comp.rightFieldEntityAlias ?? primaryTable,
+          entityAlias: comp.entityAlias ?? targetTable,
+        );
+        comp = joinComparison;
+      }
+      joinComparison = comp;
+    }
+
+    _consumePunctuation(')', 'Expected ")" closing "$rawMethod"');
+
+    final targetEngine = _resolveEngineForConnection(targetRef.connectionId);
+
+    return _FluentJoinBuilder(
+      joinType: joinType,
+      parentEntityAlias: primaryTable,
+      engineType: targetEngine,
+      connectionId: targetRef.connectionId ?? 'default',
+      targetTable: targetTable,
+      alias: targetRef.alias,
+      joinCondition: joinComparison,
+    );
+  }
+
+  void _routeWherePredicate(
+    TtqlWherePredicateNode whereNode, {
+    required String primaryTable,
+    required Map<String, String> entityAliases,
+    required int? currentJoinIndex,
+    required List<_FluentJoinBuilder> joinBuilders,
+    required void Function(TtqlExpression) onRouteRoot,
+    required void Function(int joinIdx, TtqlExpression) onRouteJoin,
+  }) {
+    final terms = _extractAndTerms(whereNode.rootExpression);
+
+    for (final term in terms) {
+      final target = _resolveTermTargetTable(
+        term,
+        primaryTable: primaryTable,
+        entityAliases: entityAliases,
+        currentJoinIndex: currentJoinIndex,
+        joinBuilders: joinBuilders,
+      );
+
+      if (target == null || target == primaryTable) {
+        onRouteRoot(term);
+      } else {
+        int matchedJoin = -1;
+        for (int i = 0; i < joinBuilders.length; i++) {
+          if (joinBuilders[i].targetTable == target ||
+              joinBuilders[i].alias == target) {
+            matchedJoin = i;
+            break;
+          }
+        }
+        if (matchedJoin != -1) {
+          onRouteJoin(matchedJoin, term);
+        } else if (currentJoinIndex != null) {
+          onRouteJoin(currentJoinIndex, term);
+        } else {
+          onRouteRoot(term);
+        }
+      }
+    }
+  }
+
+  String? _resolveTermTargetTable(
+    TtqlExpression expr, {
+    required String primaryTable,
+    required Map<String, String> entityAliases,
+    required int? currentJoinIndex,
+    required List<_FluentJoinBuilder> joinBuilders,
+  }) {
+    if (expr is TtqlComparisonExpression) {
+      if (expr.entityAlias != null) {
+        final resolved = entityAliases[expr.entityAlias!] ?? expr.entityAlias!;
+        return resolved;
+      }
+      if (currentJoinIndex == null) {
+        return primaryTable;
+      }
+      return joinBuilders[currentJoinIndex].targetTable;
+    }
+    return null;
+  }
+
+  static List<TtqlExpression> _extractAndTerms(TtqlExpression expr) {
+    if (expr is TtqlBinaryLogicalExpression && expr.operator == 'AND') {
+      return [..._extractAndTerms(expr.left), ..._extractAndTerms(expr.right)];
+    }
+    return [expr];
+  }
+
+  TtqlToken _peekNext() {
+    if (_current + 1 < tokens.length) {
+      return tokens[_current + 1];
+    }
+    return tokens.last;
+  }
+}
+
+class _FluentTableRef {
+  final String? connectionId;
+  final String tableName;
+  final String? alias;
+  const _FluentTableRef({this.connectionId, required this.tableName, this.alias});
+}
+
+class _FluentJoinBuilder {
+  final String joinType;
+  final String parentEntityAlias;
+  final DbEngineType engineType;
+  final String connectionId;
+  final String targetTable;
+  String? alias;
+  final TtqlExpression joinCondition;
+  List<String> projectedColumns = [];
+  TtqlExpression? filterCondition;
+
+  _FluentJoinBuilder({
+    required this.joinType,
+    required this.parentEntityAlias,
+    required this.engineType,
+    required this.connectionId,
+    required this.targetTable,
+    this.alias,
+    required this.joinCondition,
+  });
+
+  TtqlJoinNode build() {
+    TtqlExpression root = joinCondition;
+    if (filterCondition != null) {
+      root = TtqlBinaryLogicalExpression(
+        left: joinCondition,
+        operator: 'AND',
+        right: filterCondition!,
+      );
+    }
+
+    return TtqlJoinNode(
+      joinType: joinType,
+      parentEntityAlias: parentEntityAlias,
+      queryInvocation: TtqlQueryInvocationNode(
+        engineType: engineType,
+        connectionId: connectionId,
+        targetTableOrCollection: targetTable,
+        projectedColumns: projectedColumns,
+        wherePredicate: TtqlWherePredicateNode(
+          entityAlias: alias ?? targetTable,
+          rootExpression: root,
+        ),
+      ),
+    );
   }
 }

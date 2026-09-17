@@ -1,18 +1,18 @@
-# 4. Concrete Walkthrough of a Cross-Database Join
+# 4. Cross-Database Join Walkthrough
 
-[⬅️ 3. File Breakdown](03_file_by_file_breakdown.md) | [Main Index](README.md)
+[Back: File Breakdown](03_file_by_file_breakdown.md) | [Main Index](README.md)
 
 ---
 
 ## Scenario Overview
-Suppose we want to join customer profiles from a **PostgreSQL** database (`ecommerce_pg.customers`) with order shipments from a **MySQL** database (`inventory_mysql.shipments`).
+
+This walkthrough demonstrates how TTQL executes a join between customer profiles stored in PostgreSQL (`ecommerce_pg.customers`) and order shipments stored in MySQL (`inventory_mysql.shipments`).
 
 ---
 
-## 1. Raw TTQL Query Script
+## 1. Input TTQL Script
 
-```javascript
-// TableTalk Query Language (TTQL) Federated Analytical Query
+```ttql
 const pg = environment.connections.ecommerce_pg;
 const mysql = environment.connections.inventory_mysql;
 
@@ -20,15 +20,13 @@ const targetCustomer = 'cust_101';
 const customerFields = ['customer_id', 'full_name', 'email'];
 const shipmentFields = ['shipment_id', 'order_id'];
 
-select(() => {
-    declare asyncRun(() => {
-        PostgreSql(pg.id, [...customerFields], pg.tables['customers']),
-        MySql(mysql.id, [...shipmentFields, 'customer_id'], mysql.tables['shipments'])
-    })
-    .where((row) => row.customer_id is targetCustomer)
-})
-.orderBy(row => row.shipment_id, 'asc')
-.limit(10);
+from(pg.customers)
+  .select([...customerFields])
+  .where(customer_id == targetCustomer)
+  .innerJoin(mysql.shipments, on: 'customer_id')
+  .select([...shipmentFields])
+  .orderBy(shipment_id, 'ASC')
+  .limit(10);
 ```
 
 ---
@@ -36,62 +34,68 @@ select(() => {
 ## 2. Generated Remote Queries
 
 ### Stage 0: Executed against `@ecommerce_pg` (PostgreSQL)
-TTQL translates `PostgreSql(pg.id, ...)` into a native PostgreSQL query:
+
+TTQL translates the root stage into a native PostgreSQL query:
+
 ```sql
 SELECT "customer_id", "full_name", "email"
 FROM "customers";
 ```
-*Result returned to engine*: 1 customer record:
-- `[{customer_id: 'cust_101', full_name: 'Alice Smith', email: 'alice@example.com'}]`
 
----
+Returned row:
+```json
+[{"customer_id": "cust_101", "full_name": "Alice Smith", "email": "alice@example.com"}]
+```
 
-### Stage 0 (Parallel): Executed against `@inventory_mysql` (MySQL)
-TTQL translates `MySql(mysql.id, ...)` into a native MySQL query:
+### Stage 0: Executed against `@inventory_mysql` (MySQL, Parallel)
+
+TTQL translates the `MySql` node into a native MySQL query:
+
 ```sql
 SELECT `shipment_id`, `order_id`, `customer_id`
 FROM `shipments`;
 ```
-*Result returned to engine*: 1 shipment record:
-- `[{shipment_id: 'shp_99', order_id: 'ord_55', customer_id: 'cust_101'}]`
+
+Returned row:
+```json
+[{"shipment_id": "shp_99", "order_id": "ord_55", "customer_id": "cust_101"}]
+```
 
 ---
 
-## 3. Ephemeral SQLite Staging Schema & Ingestion
+## 3. In-Memory SQLite Staging & Ingestion
 
-Inside `sqlite3.openInMemory()`, TTQL executes the following setup:
+Inside the temporary SQLite database (`sqlite3.openInMemory()`), TTQL creates staging tables and inserts the received records in a single transaction per table:
 
 ```sql
--- Create Staging Table 0 (PostgreSQL customers)
 CREATE TABLE "ttql_stage_0_customers" (
   "customer_id" TEXT,
   "full_name" TEXT,
   "email" TEXT
 );
 
--- Bulk Transaction Insert
 BEGIN TRANSACTION;
-INSERT INTO "ttql_stage_0_customers" ("customer_id", "full_name", "email") VALUES ('cust_101', 'Alice Smith', 'alice@example.com');
+INSERT INTO "ttql_stage_0_customers" ("customer_id", "full_name", "email")
+VALUES ('cust_101', 'Alice Smith', 'alice@example.com');
 COMMIT;
 
--- Create Staging Table 1 (MySQL shipments)
 CREATE TABLE "ttql_stage_0_shipments" (
   "shipment_id" TEXT,
   "order_id" TEXT,
   "customer_id" TEXT
 );
 
--- Bulk Transaction Insert
 BEGIN TRANSACTION;
-INSERT INTO "ttql_stage_0_shipments" ("shipment_id", "order_id", "customer_id") VALUES ('shp_99', 'ord_55', 'cust_101');
+INSERT INTO "ttql_stage_0_shipments" ("shipment_id", "order_id", "customer_id")
+VALUES ('shp_99', 'ord_55', 'cust_101');
 COMMIT;
 ```
 
 ---
 
-## 4. Synthetic SQL Execution & Final Output
+## 4. Synthetic SQL Execution
 
-TTQL executes the synthetic join directly against the in-memory SQLite database:
+TTQL executes the synthetic join directly against SQLite:
 
 ```sql
 SELECT 
@@ -108,19 +112,18 @@ ORDER BY "ttql_stage_0_shipments"."shipment_id" ASC
 LIMIT 10;
 ```
 
-### Final Returned Result Set:
+### Output Result Set
+
 | customer_id | full_name | email | shipment_id | order_id |
 |---|---|---|---|---|
 | cust_101 | Alice Smith | alice@example.com | shp_99 | ord_55 |
 
 ---
 
-## Teardown & Garbage Collection
-Immediately after returning this dataset, `stagingDb.dispose()` is invoked:
-- Drops `ttql_stage_0_customers` and `ttql_stage_0_shipments`.
-- Closes the C-level SQLite handle (`_db = null`).
-- Frees all heap memory allocated during query evaluation.
+## Cleanup
+
+Upon query completion, `stagingDb.dispose()` closes the temporary SQLite database handle, releasing all staging tables and allocated memory.
 
 ---
 
-[⬅️ 3. File Breakdown](03_file_by_file_breakdown.md) | [Main Index](README.md)
+[Back: File Breakdown](03_file_by_file_breakdown.md) | [Main Index](README.md)

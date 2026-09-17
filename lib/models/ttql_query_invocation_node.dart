@@ -2,7 +2,7 @@ import 'package:ttql/models/db_engine_type.dart';
 import 'package:ttql/models/ttql_ast_node.dart';
 import 'package:ttql/models/ttql_where_predicate_node.dart';
 
-/// AST Node representing individual database query invocation `PostgreSql(connId, columns, table)`.
+/// AST Node representing individual database query invocation in an execution stage.
 class TtqlQueryInvocationNode extends TtqlAstNode {
   final DbEngineType engineType;
   final String connectionId;

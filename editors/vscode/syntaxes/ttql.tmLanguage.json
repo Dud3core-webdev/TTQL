@@ -4,13 +4,21 @@
   "scopeName": "source.ttql",
   "patterns": [
     { "include": "#comments" },
-    { "include": "#keywords" },
+    { "include": "#const_declarations" },
+    { "include": "#root_keywords" },
+    { "include": "#named_arguments" },
+    { "include": "#pipeline_methods" },
+    { "include": "#aggregate_functions" },
     { "include": "#operators" },
     { "include": "#engine_functions" },
     { "include": "#environment_access" },
+    { "include": "#order_keywords" },
     { "include": "#constants" },
     { "include": "#strings" },
-    { "include": "#numbers" }
+    { "include": "#numbers" },
+    { "include": "#table_property_access" },
+    { "include": "#identifiers" },
+    { "include": "#punctuation" }
   ],
   "repository": {
     "comments": {
@@ -30,11 +38,56 @@
         }
       ]
     },
-    "keywords": {
+    "const_declarations": {
+      "patterns": [
+        {
+          "match": "\\b(const|CONST)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.const.ttql" },
+            "2": { "name": "variable.other.constant.ttql" }
+          }
+        }
+      ]
+    },
+    "root_keywords": {
       "patterns": [
         {
           "name": "keyword.control.ttql",
-          "match": "\\b(const|select|declare|asyncRun|where|orderBy|limit|return|SELECT|DECLARE|ASYNC_RUN|WHERE|ORDER_BY|LIMIT|CONST)\\b"
+          "match": "\\b(from|FROM|select|SELECT|const|CONST|return|RETURN|as|AS)\\b"
+        }
+      ]
+    },
+    "named_arguments": {
+      "patterns": [
+        {
+          "match": "\\b(on|ON)\\s*(:)",
+          "captures": {
+            "1": { "name": "keyword.control.on.ttql" },
+            "2": { "name": "punctuation.separator.key-value.ttql" }
+          }
+        },
+        {
+          "match": "\\b(as|AS)\\s*(:)",
+          "captures": {
+            "1": { "name": "keyword.control.as.ttql" },
+            "2": { "name": "punctuation.separator.key-value.ttql" }
+          }
+        }
+      ]
+    },
+    "pipeline_methods": {
+      "patterns": [
+        {
+          "match": "(?<=\\.)(select|where|innerJoin|leftJoin|rightJoin|fullOuterJoin|join|groupBy|having|orderBy|limit|offset|skip|as)\\b",
+          "name": "entity.name.function.pipeline.ttql"
+        }
+      ]
+    },
+    "aggregate_functions": {
+      "patterns": [
+        {
+          "name": "support.function.aggregate.ttql",
+          "match": "\\b(count|COUNT|sum|SUM|avg|AVG|min|MIN|max|MAX)\\s*(?=\\()"
         }
       ]
     },
@@ -42,7 +95,7 @@
       "patterns": [
         {
           "name": "keyword.operator.logical.ttql",
-          "match": "\\b(is|and|or|not|in|like|between|IS|AND|OR|NOT|IN|LIKE|BETWEEN)\\b"
+          "match": "(&&|\\|\\||!|\\b(is|and|or|not|in|like|between|IS|AND|OR|NOT|IN|LIKE|BETWEEN)\\b)"
         },
         {
           "name": "keyword.operator.arrow.ttql",
@@ -50,7 +103,7 @@
         },
         {
           "name": "keyword.operator.comparison.ttql",
-          "match": "(===|!==|==|!=|<=|>=|<|>|=)"
+          "match": "(===|!==|==|!=|<=|>=|<>|<|>|=)"
         },
         {
           "name": "keyword.operator.spread.ttql",
@@ -61,8 +114,8 @@
     "engine_functions": {
       "patterns": [
         {
-          "name": "entity.name.function.engine.ttql",
-          "match": "\\b(PostgreSql|MySql|Mongo|Redis|Sqlite|ClickHouse|Mssql|CockroachDb|YugabyteDb|Oracle|Scylla|DuckDb|PlanetScale)\\b"
+          "name": "entity.name.class.engine.ttql",
+          "match": "\\b(PostgreSql|MySql|Mongo|Redis|Sqlite|ClickHouse|Mssql|CockroachDb|YugabyteDb|Oracle|Scylla|DuckDb|PlanetScale|MariaDb|Cassandra)\\b"
         }
       ]
     },
@@ -70,7 +123,18 @@
       "patterns": [
         {
           "name": "variable.language.environment.ttql",
-          "match": "\\b(environment|connections|tables|collections)\\b"
+          "match": "\\b(environment)\\b"
+        },
+        {
+          "match": "(?<=\\.)(connections|tables|collections)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "support.type.property-name.ttql" },
+            "2": { "name": "entity.name.namespace.connection.ttql" }
+          }
+        },
+        {
+          "name": "support.type.property-name.ttql",
+          "match": "(?<=\\.)(connections|tables|collections)\\b"
         },
         {
           "name": "variable.parameter.ttql",
@@ -79,6 +143,14 @@
         {
           "name": "entity.name.tag.connection.ttql",
           "match": "@[a-zA-Z0-9_]+"
+        }
+      ]
+    },
+    "order_keywords": {
+      "patterns": [
+        {
+          "name": "constant.language.order.ttql",
+          "match": "\\b(asc|desc|ASC|DESC)\\b"
         }
       ]
     },
@@ -121,6 +193,69 @@
         {
           "name": "constant.numeric.ttql",
           "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "table_property_access": {
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.object.connection.ttql" },
+            "2": { "name": "entity.name.type.table.ttql" },
+            "3": { "name": "variable.other.property.ttql" }
+          }
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.object.connection.ttql" },
+            "2": { "name": "entity.name.type.table.ttql" }
+          }
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "name": "entity.name.function.ttql"
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "name": "variable.other.property.ttql"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.accessor.ttql",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.separator.comma.ttql",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.ttql",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.key-value.ttql",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.parenthesis.ttql",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.square-bracket.ttql",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.curly-brace.ttql",
+          "match": "[{}]"
         }
       ]
     }

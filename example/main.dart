@@ -8,13 +8,13 @@ const pg = environment.connections.test_pg;
 const mysql = environment.connections.test_mysql;
 const targetId = 'cust_101';
 
-select(() => {
-    declare asyncRun(() => {
-        PostgreSql(pg.id, ['customer_id', 'full_name', 'email'], pg.tables['customers']),
-        MySql(mysql.id, ['shipment_id', 'order_id', 'customer_id'], mysql.tables['shipments'])
-    })
-    .where((row) => row.customer_id is targetId)
-});
+from(pg.customers)
+  .select('customer_id', 'full_name', 'email')
+  .where(customer_id == targetId)
+  .innerJoin(mysql.shipments, on: 'customer_id')
+  .select('shipment_id', 'order_id')
+  .orderBy(customer_id, 'ASC')
+  .limit(10);
 ''';
 
   print('1. Tokenizing and Parsing Script...');
@@ -24,7 +24,7 @@ select(() => {
 
   final parser = TtqlParser(tokens);
   final ast = parser.parse();
-  print('-> Parsed AST with ${ast.rootInvocations.length} root database invocations.');
+  print('-> Parsed AST with ${ast.rootInvocations.length} root database invocations and ${ast.joins.length} joins.');
 
   print('\n2. Linting Script...');
   const linter = TtqlLinter();

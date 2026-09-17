@@ -2,7 +2,7 @@
   "name": "vscode-ttql",
   "displayName": "TTQL (TableTalk Query Language)",
   "description": "Official language support, syntax highlighting, and LSP diagnostics for TTQL cross-database queries.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "tabletalk-io",
   "icon": "icons/logo.png",
   "engines": {
@@ -30,6 +30,10 @@
     "Programming Languages",
     "Linters",
     "Snippets"
+  ],
+  "activationEvents": [
+    "onLanguage:ttql",
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {

@@ -1,13 +1,11 @@
 import 'dart:convert';
 import 'dart:isolate';
-import 'package:ttql/models/db_engine_type.dart';
 import 'package:ttql/models/ttql_environment_context.dart';
 import 'package:ttql/models/ttql_exceptions.dart';
 import 'package:ttql/models/ttql_execution_result.dart';
 import 'package:ttql/models/ttql_planned_step.dart';
 import 'package:ttql/models/ttql_query_plan.dart';
-import 'package:ttql/services/translators/mongo_expression_visitor.dart';
-import 'package:ttql/services/translators/sql_expression_visitor.dart';
+import 'package:ttql/services/translators/query_dialect_strategy.dart';
 import 'package:ttql/services/ttql_connection_provider.dart';
 import 'package:ttql/services/ttql_dag_planner.dart';
 import 'package:ttql/services/ttql_environment_builder.dart';
@@ -63,8 +61,13 @@ class TtqlEngine {
 
       final rawJoinedRows = stagingDb.executeFinalSyntheticJoin(
         allSteps,
+        orderBys: ast.orderBys,
         orderBy: ast.orderBy,
         limit: ast.limit,
+        offset: ast.offset,
+        groupByColumns: ast.groupByColumns,
+        havingPredicate: ast.havingPredicate,
+        projections: ast.projections,
       );
 
       final List<Map<String, dynamic>> normalizedRows;
@@ -126,97 +129,12 @@ class TtqlEngine {
     TtqlEphemeralStagingDatabase stagingDb,
     int maxRows,
   ) {
-    if (step.engineType == DbEngineType.mongodb) {
-      final Map<String, dynamic> filter = {};
-
-      for (final dep in step.injectedDependencies) {
-        final fkValues = stagingDb.queryForeignKeys(dep.sourceStagingTable, dep.sourceColumn);
-        filter[dep.targetFilterField] = {'\$in': fkValues};
-      }
-
-      if (step.wherePredicate != null && !step.wherePredicate!.isRightOperandFieldReference) {
-        if (step.wherePredicate!.rootExpression != null) {
-          final translated = MongoExpressionVisitor.translate(step.wherePredicate!.rootExpression!);
-          if (filter.isNotEmpty) {
-            final existing = Map<String, dynamic>.from(filter);
-            filter.clear();
-            filter[r'$and'] = [existing, translated];
-          } else {
-            filter.addAll(translated);
-          }
-        } else {
-          filter[step.wherePredicate!.fieldName] = step.wherePredicate!.rightOperand;
-        }
-      }
-
-      final cleanCollection = step.targetTableOrCollection.replaceAll("'", "").replaceAll('"', '').trim();
-      return jsonEncode({
-        'collection': cleanCollection,
-        'filter': filter,
-        'limit': maxRows,
-      });
-    } else if (step.engineType == DbEngineType.redis) {
-      final cleanPattern = step.targetTableOrCollection.replaceAll("'", "").replaceAll('"', '').trim();
-      final pattern = cleanPattern.isNotEmpty ? cleanPattern : '*';
-      return 'KEYS $pattern';
-    } else {
-      final String quote = (step.engineType == DbEngineType.mysql || step.engineType == DbEngineType.planetscale) ? '`' : '"';
-      final cleanTable = step.targetTableOrCollection.replaceAll("'", "").replaceAll('"', '').trim();
-      final buffer = StringBuffer();
-      buffer.write('SELECT ');
-
-      if (step.projectedColumns.isEmpty) {
-        buffer.write('*');
-      } else {
-        buffer.write(step.projectedColumns.map((c) => '$quote$c$quote').join(', '));
-      }
-
-      buffer.write(' FROM $quote$cleanTable$quote');
-
-      final List<String> whereClauses = [];
-
-      for (final dep in step.injectedDependencies) {
-        final fkValues = stagingDb.queryForeignKeys(dep.sourceStagingTable, dep.sourceColumn);
-        if (fkValues.isEmpty) {
-          whereClauses.add('1 = 0');
-        } else {
-          final formattedValues = fkValues.map((v) => "'${v.toString().replaceAll("'", "''")}'").join(', ');
-          whereClauses.add('$quote${dep.targetFilterField}$quote IN ($formattedValues)');
-        }
-      }
-
-      if (step.wherePredicate != null && !step.wherePredicate!.isRightOperandFieldReference) {
-        if (step.wherePredicate!.rootExpression != null) {
-          final result = SqlExpressionVisitor.translate(step.wherePredicate!.rootExpression!, step.engineType);
-          String rendered = result.sqlClause;
-          if (step.engineType == DbEngineType.postgres ||
-              step.engineType == DbEngineType.cockroachdb ||
-              step.engineType == DbEngineType.yugabytedb) {
-            for (int i = 0; i < result.bindings.length; i++) {
-              final val = result.bindings[i];
-              final formattedVal = val is num ? '$val' : "'${val.toString().replaceAll("'", "''")}'";
-              rendered = rendered.replaceAll('\$${i + 1}', formattedVal);
-            }
-          } else {
-            for (final val in result.bindings) {
-              final formattedVal = val is num ? '$val' : "'${val.toString().replaceAll("'", "''")}'";
-              rendered = rendered.replaceFirst('?', formattedVal);
-            }
-          }
-          whereClauses.add(rendered);
-        } else {
-          final val = step.wherePredicate!.rightOperand;
-          whereClauses.add('$quote${step.wherePredicate!.fieldName}$quote = \'$val\'');
-        }
-      }
-
-      if (whereClauses.isNotEmpty) {
-        buffer.write(' WHERE ${whereClauses.join(' AND ')}');
-      }
-
-      buffer.write(' LIMIT $maxRows');
-      return buffer.toString();
-    }
+    final strategy = QueryDialectStrategy.forEngine(step.engineType);
+    return strategy.buildQuery(
+      step: step,
+      foreignKeyLookup: stagingDb.queryForeignKeys,
+      maxRows: maxRows,
+    );
   }
 
   static List<Map<String, dynamic>> _normalizeResultRows(List<Map<String, dynamic>> rawRows) {

@@ -1,41 +1,55 @@
 # TTQL Example Queries
 
-Showcase query scripts and configuration templates demonstrating **TTQL (TableTalk Query Language)** cross-database federated analytics.
+Sample query scripts and configuration templates for **TTQL (TableTalk Query Language)**.
 
 ---
 
-## 📁 Files in this Directory
+## Files
 
-- `cross_db_analytics.ttql`: Demonstrates an authentic cross-database join between PostgreSQL (`ecommerce_pg.customers`) and MySQL (`inventory_mysql.shipments`).
-- `connections.json.example`: Connection configuration template with environment variable expansion (`${PG_PASS}`, `${MYSQL_PASS}`, etc.).
+- `cross_db_analytics.ttql`: Example query script joining data across PostgreSQL (`ecommerce_pg.customers`) and MySQL (`inventory_mysql.shipments`).
+- `connections.json.example`: Example connection configuration file including mock data and environment variable templates (`${PG_PASS}`, `${MYSQL_PASS}`).
 
 ---
 
-## 🚀 Running the Examples
+## Running the Examples
 
-From the `packages/ttql` directory:
+Run all commands from the repository root:
 
-### 1. Static Linting (Validates AST & Read-Only Safety)
+### 1. Static Linting
+
+Validates syntax and verifies that no mutation keywords are used:
+
 ```bash
 dart run bin/ttql.dart lint example/cross_db_analytics.ttql
 ```
 
-### 2. DAG Execution Plan Inspection
+### 2. Execution Plan Inspection
+
+Inspects the query execution stages and target databases:
+
 ```bash
 dart run bin/ttql.dart plan example/cross_db_analytics.ttql
 ```
 
-### 3. Live Execution
-Ensure the test databases are seeded with `./scripts/dev.ps1 db seed` (or `./scripts/dev.sh db seed`), then:
+### 3. Execution
+
+Copy the example configuration to `connections.json`:
+
 ```bash
 cp example/connections.json.example connections.json
+```
 
-# Tabular ASCII Table
+Because `connections.json.example` includes `mockData`, the example runs out of the box without requiring live database connections:
+
+```bash
+# Tabular output
 dart run bin/ttql.dart run example/cross_db_analytics.ttql --config connections.json --format table
 
-# Formatted JSON (Pipeable to jq)
+# JSON output
 dart run bin/ttql.dart run example/cross_db_analytics.ttql --config connections.json --format json
 
-# CSV Output
+# CSV output
 dart run bin/ttql.dart run example/cross_db_analytics.ttql --config connections.json --format csv
 ```
+
+To run against live databases, edit `connections.json` with your database credentials or set the referenced environment variables.

@@ -1,7 +1,13 @@
 import 'package:sqlite3/sqlite3.dart';
+import 'package:ttql/models/ttql_binary_logical_expression.dart';
+import 'package:ttql/models/ttql_comparison_expression.dart';
 import 'package:ttql/models/ttql_exceptions.dart';
+import 'package:ttql/models/ttql_expression.dart';
+import 'package:ttql/models/ttql_group_expression.dart';
 import 'package:ttql/models/ttql_order_by_node.dart';
 import 'package:ttql/models/ttql_planned_step.dart';
+import 'package:ttql/models/ttql_projection_item.dart';
+import 'package:ttql/models/ttql_unary_logical_expression.dart';
 
 /// Ephemeral SQLite `:memory:` database manager for cross-database data staging and synthetic joining.
 /// Strictly disposable to guarantee zero memory leaks after query evaluation.
@@ -101,36 +107,78 @@ class TtqlEphemeralStagingDatabase {
     return colsA.where((c) => colsB.contains(c)).toList();
   }
 
+  String? _resolveColumnStagingTable(
+    String colName,
+    List<TtqlPlannedStep> allSteps, {
+    String? entityAlias,
+  }) {
+    if (entityAlias != null) {
+      for (final step in allSteps) {
+        if (step.entityAlias == entityAlias ||
+            step.targetTableOrCollection == entityAlias ||
+            step.stagingTableName.endsWith('_$entityAlias')) {
+          final stagedCols = _stagedTableColumns[step.stagingTableName] ?? step.projectedColumns;
+          if (stagedCols.contains(colName)) {
+            return step.stagingTableName;
+          }
+        }
+      }
+    }
+
+    for (final step in allSteps) {
+      final stagedCols = _stagedTableColumns[step.stagingTableName] ?? [];
+      if (stagedCols.contains(colName)) {
+        return step.stagingTableName;
+      }
+    }
+
+    for (final step in allSteps) {
+      if (step.projectedColumns.contains(colName)) {
+        return step.stagingTableName;
+      }
+    }
+
+    return null;
+  }
+
+  String _renderExpression(TtqlExpression expr) {
+    if (expr is TtqlBinaryLogicalExpression) {
+      final left = _renderExpression(expr.left);
+      final right = _renderExpression(expr.right);
+      return '($left ${expr.operator} $right)';
+    } else if (expr is TtqlUnaryLogicalExpression) {
+      final child = _renderExpression(expr.operand);
+      return '(NOT $child)';
+    } else if (expr is TtqlGroupExpression) {
+      final inner = _renderExpression(expr.inner);
+      return '($inner)';
+    } else if (expr is TtqlComparisonExpression) {
+      final field = expr.fieldName.contains('(') ? expr.fieldName : '"${expr.fieldName}"';
+      final val = expr.rightOperand;
+      if (val == null) {
+        if (expr.operator == '=') return '$field IS NULL';
+        if (expr.operator == '!=') return '$field IS NOT NULL';
+      }
+      final formatted = (val is num || val is bool) ? '$val' : "'${val.toString().replaceAll("'", "''")}'";
+      return '$field ${expr.operator} $formatted';
+    }
+    return '';
+  }
+
   /// Executes the final synthetic relational join across staged tables in the ephemeral SQLite database.
   List<Map<String, dynamic>> executeFinalSyntheticJoin(
     List<TtqlPlannedStep> allSteps, {
+    List<TtqlOrderByNode>? orderBys,
     TtqlOrderByNode? orderBy,
     int? limit,
+    int? offset,
+    List<String>? groupByColumns,
+    TtqlExpression? havingPredicate,
+    List<TtqlProjectionItem>? projections,
   }) {
     _ensureNotDisposed();
 
     if (allSteps.isEmpty) return [];
-
-    void appendModifiers(StringBuffer buf, {String? targetStagingTable}) {
-      if (orderBy != null) {
-        final dir = orderBy.direction;
-        if (targetStagingTable != null) {
-          buf.write(' ORDER BY "$targetStagingTable"."${orderBy.fieldName}" $dir');
-        } else {
-          buf.write(' ORDER BY "${orderBy.fieldName}" $dir');
-        }
-      }
-      if (limit != null && limit > 0) {
-        buf.write(' LIMIT $limit');
-      }
-    }
-
-    if (allSteps.length == 1) {
-      final table = allSteps.first.stagingTableName;
-      final buffer = StringBuffer('SELECT * FROM "$table"');
-      appendModifiers(buffer, targetStagingTable: table);
-      return _runSelect(buffer.toString());
-    }
 
     final rootStep = allSteps.first;
     final joinSteps = allSteps.skip(1).toList();
@@ -138,14 +186,56 @@ class TtqlEphemeralStagingDatabase {
     final buffer = StringBuffer();
     buffer.write('SELECT ');
 
-    final List<String> selectCols = [];
-    selectCols.add('"${rootStep.stagingTableName}".*');
-    for (final jStep in joinSteps) {
-      selectCols.add('"${jStep.stagingTableName}".*');
+    // 1. Projections
+    if (projections != null && projections.isNotEmpty) {
+      final List<String> renderedProjs = [];
+      for (final p in projections) {
+        if (p is TtqlColumnProjection) {
+          final targetTable = _resolveColumnStagingTable(p.columnName, allSteps, entityAlias: p.entityAlias);
+          final tablePrefix = (allSteps.length > 1 && targetTable != null) ? '"$targetTable".' : '';
+          final colExpr = '$tablePrefix"${p.columnName}"';
+          if (p.alias != null && p.alias != p.columnName) {
+            renderedProjs.add('$colExpr AS "${p.alias}"');
+          } else {
+            renderedProjs.add(colExpr);
+          }
+        } else if (p is TtqlAggregateProjection) {
+          final fn = p.functionName;
+          final arg = p.argumentColumn;
+          final String argSql;
+          if (arg == null || arg == '*') {
+            argSql = '*';
+          } else {
+            final targetTable = _resolveColumnStagingTable(arg, allSteps, entityAlias: p.entityAlias);
+            final tablePrefix = (allSteps.length > 1 && targetTable != null) ? '"$targetTable".' : '';
+            argSql = '$tablePrefix"$arg"';
+          }
+          final aggExpr = '$fn($argSql)';
+          if (p.alias != null) {
+            renderedProjs.add('$aggExpr AS "${p.alias}"');
+          } else {
+            renderedProjs.add('$aggExpr AS "${p.outputName}"');
+          }
+        }
+      }
+      buffer.write(renderedProjs.join(', '));
+    } else {
+      if (allSteps.length == 1) {
+        buffer.write('*');
+      } else {
+        final List<String> selectCols = [];
+        selectCols.add('"${rootStep.stagingTableName}".*');
+        for (final jStep in joinSteps) {
+          selectCols.add('"${jStep.stagingTableName}".*');
+        }
+        buffer.write(selectCols.join(', '));
+      }
     }
-    buffer.write(selectCols.join(', '));
+
+    // 2. FROM clause
     buffer.write(' FROM "${rootStep.stagingTableName}"');
 
+    // 3. JOIN clauses
     for (final jStep in joinSteps) {
       final jt = jStep.joinType?.toLowerCase();
       final String joinTypeSql;
@@ -164,48 +254,74 @@ class TtqlEphemeralStagingDatabase {
 
       if (parentCol == null || localCol == null) {
         final commonCols = _findCommonColumns(parentTable, jStep.stagingTableName);
-        if (commonCols.contains('customer_id')) {
-          parentCol = 'customer_id';
-          localCol = 'customer_id';
-        } else if (commonCols.contains('order_id')) {
-          parentCol = 'order_id';
-          localCol = 'order_id';
-        } else if (commonCols.isNotEmpty) {
+        if (commonCols.length == 1) {
           parentCol = commonCols.first;
           localCol = commonCols.first;
+        } else if (commonCols.isEmpty) {
+          throw TtqlExecutionException(
+            'Cannot execute join for "${jStep.stagingTableName}": No join condition or common columns found between "$parentTable" and "${jStep.stagingTableName}".',
+          );
+        } else {
+          throw TtqlExecutionException(
+            'Ambiguous join between "$parentTable" and "${jStep.stagingTableName}": Multiple common columns found (${commonCols.join(", ")}). Specify an explicit join predicate in the query.',
+          );
         }
       }
 
-      if (parentCol != null && localCol != null) {
-        buffer.write(' $joinTypeSql "${jStep.stagingTableName}" ON "${jStep.stagingTableName}"."$localCol" = "$parentTable"."$parentCol"');
-      } else {
-        buffer.write(' LEFT JOIN "${jStep.stagingTableName}" ON 1=1');
+      buffer.write(' $joinTypeSql "${jStep.stagingTableName}" ON "${jStep.stagingTableName}"."$localCol" = "$parentTable"."$parentCol"');
+    }
+
+    // 4. GROUP BY
+    if (groupByColumns != null && groupByColumns.isNotEmpty) {
+      final List<String> gCols = [];
+      for (final g in groupByColumns) {
+        final parts = g.split('.');
+        final colName = parts.last;
+        final ent = parts.length > 1 ? parts.first : null;
+        final targetTable = _resolveColumnStagingTable(colName, allSteps, entityAlias: ent);
+        final prefix = (allSteps.length > 1 && targetTable != null) ? '"$targetTable".' : '';
+        gCols.add('$prefix"$colName"');
+      }
+      buffer.write(' GROUP BY ${gCols.join(', ')}');
+    }
+
+    // 5. HAVING
+    if (havingPredicate != null) {
+      final havingSql = _renderExpression(havingPredicate);
+      if (havingSql.isNotEmpty) {
+        buffer.write(' HAVING $havingSql');
       }
     }
 
-    String? resolvedOrderTable;
-    if (orderBy != null) {
-      for (final step in allSteps) {
-        final stagedCols = _stagedTableColumns[step.stagingTableName] ?? [];
-        if (stagedCols.contains(orderBy.fieldName)) {
-          resolvedOrderTable = step.stagingTableName;
-          break;
+    // 6. ORDER BY
+    final effectiveOrderBys = (orderBys != null && orderBys.isNotEmpty)
+        ? orderBys
+        : (orderBy != null ? [orderBy] : <TtqlOrderByNode>[]);
+
+    if (effectiveOrderBys.isNotEmpty) {
+      final List<String> orderClauses = [];
+      for (final ob in effectiveOrderBys) {
+        final dir = ob.direction;
+        final targetTable = _resolveColumnStagingTable(ob.fieldName, allSteps, entityAlias: ob.entityAlias);
+        if (targetTable != null && allSteps.length > 1) {
+          orderClauses.add('"$targetTable"."${ob.fieldName}" $dir');
+        } else {
+          orderClauses.add('"${ob.fieldName}" $dir');
         }
       }
-
-      if (resolvedOrderTable == null) {
-        for (final step in allSteps) {
-          if (step.projectedColumns.contains(orderBy.fieldName)) {
-            resolvedOrderTable = step.stagingTableName;
-            break;
-          }
-        }
-      }
-
-      resolvedOrderTable ??= rootStep.stagingTableName;
+      buffer.write(' ORDER BY ${orderClauses.join(', ')}');
     }
 
-    appendModifiers(buffer, targetStagingTable: resolvedOrderTable);
+    // 7. LIMIT & OFFSET
+    if (limit != null && limit > 0) {
+      buffer.write(' LIMIT $limit');
+      if (offset != null && offset > 0) {
+        buffer.write(' OFFSET $offset');
+      }
+    } else if (offset != null && offset > 0) {
+      buffer.write(' LIMIT -1 OFFSET $offset');
+    }
+
     return _runSelect(buffer.toString());
   }
 

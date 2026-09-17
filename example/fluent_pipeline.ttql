@@ -1,0 +1,13 @@
+// TableTalk Query Language (TTQL) - Federated Query Pipeline
+// Clean, chainable federated analytics across database engines
+
+const pg = environment.connections.ecommerce_pg;
+const mysql = environment.connections.inventory_mysql;
+
+from(pg.customers)
+  .select('customer_id', 'full_name', 'email')
+  .where(customer_id == 'cust_101')
+  .innerJoin(mysql.shipments, on: 'customer_id')
+  .select('shipment_id', 'status')
+  .orderBy(customer_id, 'asc')
+  .limit(10);

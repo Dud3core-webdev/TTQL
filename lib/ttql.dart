@@ -2,9 +2,9 @@
 library ttql;
 
 // Models
+export 'models/db_engine_registry.dart';
 export 'models/db_engine_type.dart';
 export 'models/ttql_ast_node.dart';
-export 'models/ttql_async_run_node.dart';
 export 'models/ttql_binary_logical_expression.dart';
 export 'models/ttql_comparison_expression.dart';
 export 'models/ttql_connection_descriptor.dart';
@@ -19,11 +19,11 @@ export 'models/ttql_inferred_type.dart';
 export 'models/ttql_join_node.dart';
 export 'models/ttql_order_by_node.dart';
 export 'models/ttql_planned_step.dart';
+export 'models/ttql_projection_item.dart';
 export 'models/ttql_query_invocation_node.dart';
 export 'models/ttql_query_plan.dart';
 export 'models/ttql_scope_range.dart';
 export 'models/ttql_script_node.dart';
-export 'models/ttql_select_node.dart';
 export 'models/ttql_suggestion.dart';
 export 'models/ttql_suggestion_kind.dart';
 export 'models/ttql_token.dart';
@@ -45,7 +45,13 @@ export 'services/ttql_environment_builder.dart';
 export 'services/ttql_ephemeral_staging_database.dart';
 export 'services/ttql_lexer.dart';
 export 'services/ttql_linter.dart';
+export 'services/lsp/json_rpc_transport.dart';
+export 'services/lsp/lsp_document_store.dart';
 export 'services/ttql_lsp_server.dart';
 export 'services/ttql_parser.dart';
 export 'services/translators/mongo_expression_visitor.dart';
+export 'services/translators/mongo_query_dialect.dart';
+export 'services/translators/query_dialect_strategy.dart';
+export 'services/translators/redis_query_dialect.dart';
 export 'services/translators/sql_expression_visitor.dart';
+export 'services/translators/sql_query_dialect.dart';

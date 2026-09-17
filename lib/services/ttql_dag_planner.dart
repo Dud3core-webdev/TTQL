@@ -31,7 +31,7 @@ class TtqlDagPlanner {
     final List<TtqlQueryInvocationNode> rootQueries = List.from(script.rootInvocations);
 
     if (rootQueries.isEmpty) {
-      throw const TtqlExecutionException('Select block does not contain any database queries.');
+      throw const TtqlExecutionException('TTQL script does not contain any database queries.');
     }
 
     final int batchSize = TtqlConstants.maxConcurrentQueriesPerBatch;
@@ -111,8 +111,11 @@ class TtqlDagPlanner {
 
               parentStagingTable = columnToStagingTable[parentCol];
 
+              final rootStagingTable = stages[0]?.first.stagingTableName ?? '${TtqlConstants.stagingTablePrefix}0';
+              parentStagingTable ??= rootStagingTable;
+
               bindings.add(TtqlDependencyBinding(
-                sourceStagingTable: parentStagingTable ?? '${TtqlConstants.stagingTablePrefix}0',
+                sourceStagingTable: parentStagingTable,
                 sourceColumn: parentCol,
                 targetFilterField: localJoinCol,
               ));
@@ -120,14 +123,9 @@ class TtqlDagPlanner {
           }
 
           if (filterTerms.isNotEmpty) {
-            final combinedFilterExpr = _combineAndTerms(filterTerms);
-            final firstFilterComp = _findFirstComparison(combinedFilterExpr!);
+            final combinedFilterExpr = _combineAndTerms(filterTerms)!;
             directFilterPredicate = TtqlWherePredicateNode(
               entityAlias: target.wherePredicate!.entityAlias,
-              fieldName: firstFilterComp?.fieldName ?? '',
-              operator: firstFilterComp?.operator ?? '=',
-              rightOperand: firstFilterComp?.rightOperand ?? '',
-              isRightOperandFieldReference: false,
               rootExpression: combinedFilterExpr,
             );
           }
@@ -138,10 +136,11 @@ class TtqlDagPlanner {
           localJoinCol = target.wherePredicate!.fieldName;
           parentJoinCol = parentCol;
 
-          parentStagingTable = columnToStagingTable[parentCol];
+          final rootStagingTable = stages[0]?.first.stagingTableName ?? '${TtqlConstants.stagingTablePrefix}0';
+          parentStagingTable = columnToStagingTable[parentCol] ?? rootStagingTable;
 
           bindings.add(TtqlDependencyBinding(
-            sourceStagingTable: parentStagingTable ?? '${TtqlConstants.stagingTablePrefix}0',
+            sourceStagingTable: parentStagingTable,
             sourceColumn: parentCol,
             targetFilterField: localJoinCol,
           ));
@@ -273,22 +272,10 @@ class TtqlDagPlanner {
     Map<String, dynamic> constantValues,
   ) {
     if (predicate == null) return null;
-    final resolvedRoot = predicate.rootExpression != null
-        ? _resolveExpressionConstants(predicate.rootExpression!, constantValues)
-        : null;
-
-    dynamic rightOp = predicate.rightOperand;
-    if (!predicate.isRightOperandFieldReference && constantValues.containsKey(rightOp)) {
-      rightOp = constantValues[rightOp];
-    }
+    final resolvedRoot = _resolveExpressionConstants(predicate.rootExpression, constantValues);
 
     return TtqlWherePredicateNode(
       entityAlias: predicate.entityAlias,
-      fieldName: predicate.fieldName,
-      operator: predicate.operator,
-      rightOperand: rightOp,
-      isRightOperandFieldReference: predicate.isRightOperandFieldReference,
-      rightFieldEntityAlias: predicate.rightFieldEntityAlias,
       rootExpression: resolvedRoot,
     );
   }

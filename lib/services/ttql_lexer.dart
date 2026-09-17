@@ -57,9 +57,14 @@ class TtqlLexer {
         case ';':
           tokens.add(TtqlToken(type: TtqlTokenType.punctuation, value: ';', line: startLine, column: startCol, offset: startOffset));
           break;
+        case ':':
+          tokens.add(TtqlToken(type: TtqlTokenType.punctuation, value: ':', line: startLine, column: startCol, offset: startOffset));
+          break;
         case '=':
           if (_match('>')) {
             tokens.add(TtqlToken(type: TtqlTokenType.punctuation, value: '=>', line: startLine, column: startCol, offset: startOffset));
+          } else if (_match('=')) {
+            tokens.add(TtqlToken(type: TtqlTokenType.operator, value: '==', line: startLine, column: startCol, offset: startOffset));
           } else {
             tokens.add(TtqlToken(type: TtqlTokenType.operator, value: '=', line: startLine, column: startCol, offset: startOffset));
           }
@@ -84,29 +89,19 @@ class TtqlLexer {
           if (_match('=')) {
             tokens.add(TtqlToken(type: TtqlTokenType.operator, value: '!=', line: startLine, column: startCol, offset: startOffset));
           } else {
-            throw TtqlParseException(
-              'Unexpected "!". In TTQL, use SQL-standard "NOT" for logical negation.',
-              line: startLine,
-              column: startCol,
-            );
+            tokens.add(TtqlToken(type: TtqlTokenType.keyword, value: 'NOT', line: startLine, column: startCol, offset: startOffset));
           }
           break;
         case '&':
           if (_match('&')) {
-            throw TtqlParseException(
-              'In TTQL, use SQL-standard "AND" for logical conjunction.',
-              line: startLine,
-              column: startCol,
-            );
+            tokens.add(TtqlToken(type: TtqlTokenType.keyword, value: 'AND', line: startLine, column: startCol, offset: startOffset));
+            break;
           }
           throw TtqlParseException('Unexpected character "&"', line: startLine, column: startCol);
         case '|':
           if (_match('|')) {
-            throw TtqlParseException(
-              'In TTQL, use SQL-standard "OR" for logical disjunction.',
-              line: startLine,
-              column: startCol,
-            );
+            tokens.add(TtqlToken(type: TtqlTokenType.keyword, value: 'OR', line: startLine, column: startCol, offset: startOffset));
+            break;
           }
           throw TtqlParseException('Unexpected character "|"', line: startLine, column: startCol);
         case '\'':
@@ -200,22 +195,24 @@ class TtqlLexer {
     final lower = text.toLowerCase();
     final upper = text.toUpperCase();
 
-    if (lower == TtqlConstants.keywordSelect.toLowerCase() ||
-        lower == TtqlConstants.keywordDeclare.toLowerCase() ||
-        lower == TtqlConstants.keywordAsyncRun.toLowerCase() ||
+    if (lower == TtqlConstants.keywordFrom.toLowerCase() ||
+        lower == TtqlConstants.keywordOn.toLowerCase() ||
+        lower == TtqlConstants.keywordJoin.toLowerCase() ||
+        lower == TtqlConstants.keywordSelect.toLowerCase() ||
         lower == TtqlConstants.keywordWhere.toLowerCase() ||
         lower == TtqlConstants.keywordInnerJoin.toLowerCase() ||
         lower == TtqlConstants.keywordLeftJoin.toLowerCase() ||
         lower == TtqlConstants.keywordRightJoin.toLowerCase() ||
         lower == TtqlConstants.keywordFullOuterJoin.toLowerCase() ||
-        lower == TtqlConstants.keywordInnerJoinLegacy.toLowerCase() ||
-        lower == TtqlConstants.keywordLeftJoinLegacy.toLowerCase() ||
-        lower == TtqlConstants.keywordRightJoinLegacy.toLowerCase() ||
-        lower == TtqlConstants.keywordFullOuterJoinLegacy.toLowerCase() ||
         lower == TtqlConstants.keywordConst.toLowerCase() ||
         lower == TtqlConstants.keywordIs.toLowerCase() ||
         lower == TtqlConstants.keywordOrderBy.toLowerCase() ||
         lower == TtqlConstants.keywordLimit.toLowerCase() ||
+        lower == TtqlConstants.keywordOffset.toLowerCase() ||
+        lower == TtqlConstants.keywordSkip.toLowerCase() ||
+        lower == TtqlConstants.keywordGroupBy.toLowerCase() ||
+        lower == TtqlConstants.keywordHaving.toLowerCase() ||
+        lower == TtqlConstants.keywordAs.toLowerCase() ||
         upper == TtqlConstants.keywordAnd ||
         upper == TtqlConstants.keywordOr ||
         upper == TtqlConstants.keywordNot ||

@@ -1,7 +1,7 @@
 /// Centralized constants for TableTalk Query Language (TTQL).
 /// Defines limits, keywords, staging identifiers, and forbidden tokens.
 class TtqlConstants {
-  /// Strict limit on concurrent query isolates in an asyncRun block.
+  /// Strict limit on concurrent queries per execution batch.
   /// Any surplus queries are automatically throttled into sequential FIFO stages.
   static const int maxConcurrentQueriesPerBatch = 3;
 
@@ -12,18 +12,15 @@ class TtqlConstants {
   static const String sqliteMemoryPath = ':memory:';
 
   /// TTQL Language Keywords.
+  static const String keywordFrom = 'from';
+  static const String keywordOn = 'on';
+  static const String keywordJoin = 'join';
   static const String keywordSelect = 'select';
-  static const String keywordDeclare = 'declare';
-  static const String keywordAsyncRun = 'asyncRun';
   static const String keywordWhere = 'where';
   static const String keywordInnerJoin = 'innerJoin';
-  static const String keywordInnerJoinLegacy = 'InnerJoin';
   static const String keywordLeftJoin = 'leftJoin';
-  static const String keywordLeftJoinLegacy = 'LeftJoin';
   static const String keywordRightJoin = 'rightJoin';
-  static const String keywordRightJoinLegacy = 'RightJoin';
   static const String keywordFullOuterJoin = 'fullOuterJoin';
-  static const String keywordFullOuterJoinLegacy = 'FullOuterJoin';
   static const String keywordConst = 'const';
   static const String keywordIs = 'is';
   static const String keywordAnd = 'AND';
@@ -33,6 +30,16 @@ class TtqlConstants {
   static const String keywordIn = 'IN';
   static const String keywordOrderBy = 'orderBy';
   static const String keywordLimit = 'limit';
+  static const String keywordOffset = 'offset';
+  static const String keywordSkip = 'skip';
+  static const String keywordGroupBy = 'groupBy';
+  static const String keywordHaving = 'having';
+  static const String keywordAs = 'as';
+  static const String keywordCount = 'count';
+  static const String keywordSum = 'sum';
+  static const String keywordAvg = 'avg';
+  static const String keywordMin = 'min';
+  static const String keywordMax = 'max';
   static const String keywordAsc = 'ASC';
   static const String keywordDesc = 'DESC';
   static const String spreadOperator = '...';
