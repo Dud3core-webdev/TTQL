@@ -89,6 +89,8 @@ class TtqlEnvironmentBuilder {
   String generateTypeDeclarations(TtqlEnvironmentContext context) {
     final buffer = StringBuffer();
     buffer.writeln('// Auto-generated TTQL Environment Intellisense');
+    buffer.writeln('// Projection macros: use  declare function name(param) { return { ... }; }');
+    buffer.writeln('// before from() to define reusable, inlined select() bodies.');
     buffer.writeln('declare const environment: {');
     buffer.writeln('  connections: {');
 

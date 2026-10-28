@@ -118,7 +118,7 @@ class TtqlEphemeralStagingDatabase {
             step.targetTableOrCollection == entityAlias ||
             step.stagingTableName.endsWith('_$entityAlias')) {
           final stagedCols = _stagedTableColumns[step.stagingTableName] ?? step.projectedColumns;
-          if (stagedCols.contains(colName)) {
+          if (stagedCols.isEmpty || stagedCols.contains(colName)) {
             return step.stagingTableName;
           }
         }

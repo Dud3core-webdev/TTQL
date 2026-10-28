@@ -213,6 +213,9 @@ class TtqlLexer {
         lower == TtqlConstants.keywordGroupBy.toLowerCase() ||
         lower == TtqlConstants.keywordHaving.toLowerCase() ||
         lower == TtqlConstants.keywordAs.toLowerCase() ||
+        lower == TtqlConstants.keywordDeclare.toLowerCase() ||
+        lower == TtqlConstants.keywordFunction.toLowerCase() ||
+        lower == TtqlConstants.keywordReturn.toLowerCase() ||
         upper == TtqlConstants.keywordAnd ||
         upper == TtqlConstants.keywordOr ||
         upper == TtqlConstants.keywordNot ||

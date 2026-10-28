@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 import 'package:ttql/ttql.dart';
 
@@ -61,6 +63,52 @@ void main() {
       expect(results.length, equals(1));
       expect(results.first['sku'], equals('ITEM_A'));
       expect(results.first['qty'], equals(42));
+    });
+
+    test('executes live read-only SQL query against local SQLite file when mockData is omitted', () async {
+      final tempDir = Directory.systemTemp.createTempSync('ttql_cli_sqlite_');
+      final dbFile = File('${tempDir.path}/live_test.sqlite');
+      final db = sqlite3.open(dbFile.path);
+      db.execute('CREATE TABLE items (sku TEXT PRIMARY KEY, qty INTEGER);');
+      db.execute("INSERT INTO items VALUES ('SKU-99', 15);");
+      db.dispose();
+
+      try {
+        final provider = CliConnectionProvider();
+        provider.registerConnection(
+          id: 'local_wh',
+          name: 'Local Warehouse',
+          engineType: DbEngineType.sqlite,
+          connectionString: dbFile.path,
+          schemaOverview: {'items': ['sku', 'qty']},
+        );
+
+        final rows = await provider.executeQueryOnConnection(
+          'local_wh',
+          'SELECT sku, qty FROM items',
+        );
+        expect(rows.length, equals(1));
+        expect(rows.first['sku'], equals('SKU-99'));
+        expect(rows.first['qty'], equals(15));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('fails fast with TtqlExecutionException when remote engine lacks mockData or liveQueryExecutor', () async {
+      final provider = CliConnectionProvider();
+      provider.registerConnection(
+        id: 'pg_unconfigured',
+        name: 'Unconfigured PG',
+        engineType: DbEngineType.postgres,
+        connectionString: 'postgres://localhost:5432/db',
+        schemaOverview: {},
+      );
+
+      expect(
+        () => provider.executeQueryOnConnection('pg_unconfigured', 'SELECT 1'),
+        throwsA(isA<TtqlExecutionException>()),
+      );
     });
   });
 }

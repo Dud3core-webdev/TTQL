@@ -33,7 +33,7 @@ This document establishes the official architectural boundaries, responsibilitie
 
 ---
 
-## 1. Compiler Subsystem (`lib/compiler/` & `lib/models/`)
+## 1. Compiler Subsystem (`lib/compiler/compiler.dart` & `lib/models/`)
 
 ### Primary Responsibility
 The compiler frontend scans raw TTQL query script text into tokens, enforces read-only security invariants (rejecting SQL mutations like `DROP`, `DELETE`, `INSERT`), validates syntax, and constructs an immutable Abstract Syntax Tree (AST).
@@ -50,7 +50,7 @@ The compiler frontend scans raw TTQL query script text into tokens, enforces rea
 
 ---
 
-## 2. Planner Subsystem (`lib/planner/` & `lib/services/ttql_dag_planner.dart`)
+## 2. Planner Subsystem (`lib/planner/planner.dart` & `lib/services/ttql_dag_planner.dart`)
 
 ### Primary Responsibility
 Transforms a declarative AST into an executable Directed Acyclic Graph (DAG) query plan (`TtqlQueryPlan`). Throttles independent root queries into batches of at most 3 concurrent isolate queries (`TtqlConstants.maxConcurrentQueriesPerBatch`) and sequences foreign-key dependent joins into sequential stages.
@@ -67,7 +67,7 @@ Transforms a declarative AST into an executable Directed Acyclic Graph (DAG) que
 
 ---
 
-## 3. Runtime & Ephemeral Staging Subsystem (`lib/runtime/`)
+## 3. Runtime & Ephemeral Staging Subsystem (`lib/runtime/runtime.dart`)
 
 ### Primary Responsibility
 Orchestrates end-to-end plan execution:
@@ -88,7 +88,7 @@ Orchestrates end-to-end plan execution:
 
 ---
 
-## 4. Query Dialects Subsystem (`lib/dialects/` & `lib/services/translators/`)
+## 4. Query Dialects Subsystem (`lib/dialects/dialects.dart` & `lib/services/translators/`)
 
 ### Primary Responsibility
 Translates planned steps and AST filter expressions into native database query payloads using the **Strategy Pattern**:
@@ -110,7 +110,7 @@ Translates planned steps and AST filter expressions into native database query p
 
 ---
 
-## 5. Tooling & Presentation Subsystem (`lib/tooling/`)
+## 5. Tooling & Presentation Subsystem (`lib/tooling/tooling.dart`)
 
 ### Primary Responsibility
 Provides developer experience tooling and terminal presentation:

@@ -2,6 +2,7 @@
 library ttql;
 
 // Models
+export 'models/cli_connection_descriptor.dart';
 export 'models/db_engine_registry.dart';
 export 'models/db_engine_type.dart';
 export 'models/ttql_ast_node.dart';

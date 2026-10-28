@@ -35,6 +35,9 @@ class TtqlConstants {
   static const String keywordGroupBy = 'groupBy';
   static const String keywordHaving = 'having';
   static const String keywordAs = 'as';
+  static const String keywordDeclare = 'declare';
+  static const String keywordFunction = 'function';
+  static const String keywordReturn = 'return';
   static const String keywordCount = 'count';
   static const String keywordSum = 'sum';
   static const String keywordAvg = 'avg';

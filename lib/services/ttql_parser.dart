@@ -24,6 +24,7 @@ class TtqlParser {
   final Map<String, String> _connectionAliases = {};
   final Map<String, dynamic> _constantValues = {};
   final Map<String, TtqlInferredType> _constantTypes = {};
+  final Map<String, _TtqlProjectionMacro> _declaredFunctions = {};
   int _current = 0;
 
   TtqlParser(this.tokens, {this.environmentContext});
@@ -33,13 +34,19 @@ class TtqlParser {
     _connectionAliases.clear();
     _constantValues.clear();
     _constantTypes.clear();
+    _declaredFunctions.clear();
 
     // 1. Parse optional "const alias = environment.connections.target;" or "const var = 'literal';" statements
     while (_check(TtqlTokenType.keyword) && _peek().value == 'const') {
       _parseConstDeclaration(_connectionAliases, _constantValues, _constantTypes);
     }
 
-    // 2. Parse query pipeline starting with 'from'
+    // 2. Parse optional projection macro declarations ("declare function name(param) { return { ... }; }")
+    while (_check(TtqlTokenType.keyword) && _peek().value.toLowerCase() == 'declare') {
+      _parseProjectionMacroDeclaration();
+    }
+
+    // 3. Parse query pipeline starting with 'from'
     if (_check(TtqlTokenType.keyword) && _peek().value.toLowerCase() == 'from') {
       return _parseFluentPipeline();
     }
@@ -48,6 +55,64 @@ class TtqlParser {
       'Expected "from" statement to start query pipeline, found "${_isAtEnd() ? "EOF" : _peek().value}"',
       line: _isAtEnd() ? 1 : _peek().line,
       column: _isAtEnd() ? 1 : _peek().column,
+    );
+  }
+
+  /// Parses a `declare function name(param) { return { ...projections... }; }` block
+  /// and registers it as a reusable projection macro.
+  void _parseProjectionMacroDeclaration() {
+    _consumeKeyword('declare', 'Expected "declare"');
+    _consumeKeyword('function', 'Expected "function" after "declare"');
+
+    final nameToken = _consume(TtqlTokenType.identifier, 'Expected function name after "declare function"');
+    final macroName = nameToken.value;
+
+    _consumePunctuation('(', 'Expected "(" after function name "$macroName"');
+    final List<String> paramNames = [];
+    while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+      final paramToken = _consume(TtqlTokenType.identifier, 'Expected parameter name in "declare function $macroName(...)"');
+      paramNames.add(paramToken.value);
+      if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+        _advance();
+      } else {
+        break;
+      }
+    }
+    _consumePunctuation(')', 'Expected ")" after parameter in "declare function $macroName(...)"');
+
+    _consumePunctuation('{', 'Expected "{" opening function body');
+    _consumeKeyword('return', 'Expected "return" as the first statement in function body');
+    _consumePunctuation('{', 'Expected "{" opening return object literal');
+
+    // Parse projection items until closing '}'
+    final defaultEntity = paramNames.isNotEmpty ? paramNames.first : '';
+    final List<TtqlProjectionItem> body = [];
+    while (!(_check(TtqlTokenType.punctuation) && _peek().value == '}') && !_isAtEnd()) {
+      body.add(_parseSingleProjectionItem(defaultEntity));
+      if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+        _advance();
+      } else {
+        break;
+      }
+    }
+
+    _consumePunctuation('}', 'Expected "}" closing return object literal');
+    if (_check(TtqlTokenType.punctuation) && _peek().value == ';') _advance();
+    _consumePunctuation('}', 'Expected "}" closing function body');
+    if (_check(TtqlTokenType.punctuation) && _peek().value == ';') _advance();
+
+    if (body.isEmpty) {
+      throw TtqlParseException(
+        'Projection macro "$macroName" must return at least one column or aggregate',
+        line: nameToken.line,
+        column: nameToken.column,
+      );
+    }
+
+    _declaredFunctions[macroName] = _TtqlProjectionMacro(
+      name: macroName,
+      paramNames: paramNames,
+      body: body,
     );
   }
 
@@ -410,8 +475,7 @@ class TtqlParser {
     }
     if (primaryRef.alias != null) {
       entityAliases[primaryRef.alias!] = primaryTable;
-    }
-    if (primaryTable.isNotEmpty) {
+    } else if (primaryTable.isNotEmpty && !entityAliases.containsKey(primaryTable[0].toLowerCase())) {
       entityAliases[primaryTable[0].toLowerCase()] = primaryTable;
     }
 
@@ -623,12 +687,14 @@ class TtqlParser {
       connectionId: primaryRef.connectionId ?? 'default',
       targetTableOrCollection: primaryTable,
       projectedColumns: rootColumns,
+      entityAlias: primaryRef.alias ?? primaryTable,
       wherePredicate: rootWhere,
     );
 
     return TtqlScriptNode(
       declaredConstants: Map.from(_constantValues),
       connectionAliases: Map.from(_connectionAliases),
+      entityAliases: Map.from(entityAliases),
       rootInvocations: [rootInvocation],
       joins: joinBuilders.map((b) => b.build()).toList(),
       orderBys: orderBys,
@@ -837,6 +903,8 @@ class TtqlParser {
               items.add(TtqlColumnProjection(columnName: v.toString()));
             }
           }
+        } else if (_isMacroCall()) {
+          items.addAll(_expandMacroCall(defaultEntity));
         } else {
           items.add(_parseSingleProjectionItem(defaultEntity));
         }
@@ -847,7 +915,11 @@ class TtqlParser {
       _consumePunctuation(']', 'Expected "]" closing select array');
     } else {
       while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
-        items.add(_parseSingleProjectionItem(defaultEntity));
+        if (_isMacroCall()) {
+          items.addAll(_expandMacroCall(defaultEntity));
+        } else {
+          items.add(_parseSingleProjectionItem(defaultEntity));
+        }
         if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
           _advance();
         } else {
@@ -858,6 +930,78 @@ class TtqlParser {
 
     _consumePunctuation(')', 'Expected ")" closing select(...)');
     return items;
+  }
+
+  /// Returns true if the current token is an identifier that names a known projection macro
+  /// and is immediately followed by `(`.
+  bool _isMacroCall() {
+    if (!_check(TtqlTokenType.identifier)) return false;
+    final name = _peek().value;
+    if (!_declaredFunctions.containsKey(name)) return false;
+    if (_current + 1 >= tokens.length) return false;
+    return tokens[_current + 1].value == '(';
+  }
+
+  /// Consumes a macro call `name(arg1, arg2, ...)` and returns the inlined projection items
+  /// with the declared parameter names substituted by the caller's entity aliases.
+  List<TtqlProjectionItem> _expandMacroCall(String defaultEntity) {
+    final nameToken = _advance(); // macro name
+    final macro = _declaredFunctions[nameToken.value]!;
+
+    _consumePunctuation('(', 'Expected "(" in macro call "${macro.name}(...)"');
+
+    final List<String> callArgs = [];
+    while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+      if (_check(TtqlTokenType.identifier) || _check(TtqlTokenType.keyword)) {
+        callArgs.add(_advance().value);
+      } else {
+        break;
+      }
+      if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
+        _advance();
+      } else {
+        break;
+      }
+    }
+
+    _consumePunctuation(')', 'Expected ")" closing macro call "${macro.name}(...)"');
+
+    // Build replacement mapping from declared parameter names to caller arguments
+    final Map<String, String> aliasMap = {};
+    for (int i = 0; i < macro.paramNames.length; i++) {
+      if (i < callArgs.length) {
+        aliasMap[macro.paramNames[i]] = callArgs[i];
+      }
+    }
+    // If macro declared a single parameter and call was passed without arguments, default to defaultEntity
+    if (macro.paramNames.length == 1 && callArgs.isEmpty && defaultEntity.isNotEmpty) {
+      aliasMap[macro.paramNames.first] = defaultEntity;
+    }
+
+    // Inline the macro body, substituting parameter aliases with caller aliases
+    return macro.body.map((item) => _rebindAliases(item, aliasMap)).toList();
+  }
+
+  /// Returns a copy of [item] with its entityAlias replaced if present in [aliasMap].
+  TtqlProjectionItem _rebindAliases(TtqlProjectionItem item, Map<String, String> aliasMap) {
+    if (aliasMap.isEmpty) return item;
+    if (item is TtqlColumnProjection) {
+      final bound = aliasMap[item.entityAlias] ?? item.entityAlias;
+      return TtqlColumnProjection(
+        columnName: item.columnName,
+        entityAlias: bound,
+        alias: item.alias,
+      );
+    } else if (item is TtqlAggregateProjection) {
+      final bound = aliasMap[item.entityAlias] ?? item.entityAlias;
+      return TtqlAggregateProjection(
+        functionName: item.functionName,
+        argumentColumn: item.argumentColumn,
+        entityAlias: bound,
+        alias: item.alias,
+      );
+    }
+    return item;
   }
 
   TtqlProjectionItem _parseSingleProjectionItem(String defaultEntity) {
@@ -1153,8 +1297,7 @@ class TtqlParser {
     }
     if (targetRef.alias != null) {
       entityAliases[targetRef.alias!] = targetTable;
-    }
-    if (targetTable.isNotEmpty) {
+    } else if (targetTable.isNotEmpty && !entityAliases.containsKey(targetTable[0].toLowerCase())) {
       entityAliases[targetTable[0].toLowerCase()] = targetTable;
     }
 
@@ -1200,17 +1343,40 @@ class TtqlParser {
       final leftQualifier = comp.entityAlias;
       final rightQualifier = comp.rightFieldEntityAlias;
 
-      if (leftQualifier != null &&
-          (leftQualifier == primaryTable || entityAliases[leftQualifier] == primaryTable) &&
-          rightQualifier != null &&
-          (rightQualifier == targetTable || entityAliases[rightQualifier] == targetTable)) {
+      final isLeftTarget = leftQualifier != null &&
+          (leftQualifier == targetTable ||
+              leftQualifier == targetRef.alias ||
+              entityAliases[leftQualifier] == targetTable);
+      final isRightTarget = rightQualifier != null &&
+          (rightQualifier == targetTable ||
+              rightQualifier == targetRef.alias ||
+              entityAliases[rightQualifier] == targetTable);
+
+      if (isRightTarget && !isLeftTarget) {
+        // e.g. on: c.customer_id == s.customer_id
+        final localCol = comp.rightOperand.toString().split('.').last;
+        final parentCol = comp.fieldName;
+        final parentAlias = leftQualifier ?? primaryTable;
         comp = TtqlComparisonExpression(
-          fieldName: comp.rightOperand.toString().split('.').last,
+          fieldName: localCol,
           operator: comp.operator,
-          rightOperand: comp.fieldName,
+          rightOperand: parentCol,
           isRightOperandFieldReference: true,
-          rightFieldEntityAlias: primaryTable,
-          entityAlias: targetTable,
+          rightFieldEntityAlias: parentAlias,
+          entityAlias: targetRef.alias ?? targetTable,
+        );
+      } else if (isLeftTarget) {
+        // e.g. on: s.customer_id == c.customer_id
+        final localCol = comp.fieldName;
+        final parentCol = comp.rightOperand.toString().split('.').last;
+        final parentAlias = rightQualifier ?? primaryTable;
+        comp = TtqlComparisonExpression(
+          fieldName: localCol,
+          operator: comp.operator,
+          rightOperand: parentCol,
+          isRightOperandFieldReference: true,
+          rightFieldEntityAlias: parentAlias,
+          entityAlias: targetRef.alias ?? targetTable,
         );
       } else {
         joinComparison = TtqlComparisonExpression(
@@ -1229,10 +1395,11 @@ class TtqlParser {
     _consumePunctuation(')', 'Expected ")" closing "$rawMethod"');
 
     final targetEngine = _resolveEngineForConnection(targetRef.connectionId);
+    final resolvedParentAlias = joinComparison.rightFieldEntityAlias ?? primaryTable;
 
     return _FluentJoinBuilder(
       joinType: joinType,
-      parentEntityAlias: primaryTable,
+      parentEntityAlias: resolvedParentAlias,
       engineType: targetEngine,
       connectionId: targetRef.connectionId ?? 'default',
       targetTable: targetTable,
@@ -1310,6 +1477,7 @@ class TtqlParser {
     return [expr];
   }
 
+
   TtqlToken _peekNext() {
     if (_current + 1 < tokens.length) {
       return tokens[_current + 1];
@@ -1364,6 +1532,7 @@ class _FluentJoinBuilder {
         connectionId: connectionId,
         targetTableOrCollection: targetTable,
         projectedColumns: projectedColumns,
+        entityAlias: alias ?? targetTable,
         wherePredicate: TtqlWherePredicateNode(
           entityAlias: alias ?? targetTable,
           rootExpression: root,
@@ -1371,4 +1540,19 @@ class _FluentJoinBuilder {
       ),
     );
   }
+}
+
+/// Internal representation of a parsed `declare function` projection macro.
+/// Stores the pre-parsed projection body and declared parameter names.
+/// At call sites, the parser substitutes declared parameter aliases with caller aliases via [TtqlParser._rebindAliases].
+class _TtqlProjectionMacro {
+  final String name;
+  final List<String> paramNames;
+  final List<TtqlProjectionItem> body;
+
+  const _TtqlProjectionMacro({
+    required this.name,
+    required this.paramNames,
+    required this.body,
+  });
 }

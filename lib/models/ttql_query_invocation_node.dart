@@ -9,6 +9,7 @@ class TtqlQueryInvocationNode extends TtqlAstNode {
   final String targetTableOrCollection;
   final List<String> projectedColumns;
   final TtqlWherePredicateNode? wherePredicate;
+  final String? entityAlias;
 
   const TtqlQueryInvocationNode({
     required this.engineType,
@@ -16,6 +17,7 @@ class TtqlQueryInvocationNode extends TtqlAstNode {
     required this.targetTableOrCollection,
     required this.projectedColumns,
     this.wherePredicate,
+    this.entityAlias,
   });
 
   List<String> get projectedProperties => projectedColumns;
@@ -27,7 +29,9 @@ class TtqlQueryInvocationNode extends TtqlAstNode {
       'connectionId': connectionId,
       'targetTableOrCollection': targetTableOrCollection,
       'projectedColumns': projectedColumns,
+      if (entityAlias != null) 'entityAlias': entityAlias,
       if (wherePredicate != null) 'wherePredicate': wherePredicate!.toJson(),
     };
   }
 }
+

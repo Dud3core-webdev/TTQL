@@ -17,8 +17,9 @@ Welcome to the **TableTalk Query Language (TTQL)** developer syntax guide. TTQL 
 9. [🎛️ Post-Aggregation Filtering (`.having`)](#-post-aggregation-filtering-having)
 10. [↕️ Sorting & Ordering (`.orderBy`)](#-sorting--ordering-orderby)
 11. [📑 Pagination (`.limit`, `.offset`, `.skip`)](#-pagination-limit-offset-skip)
-12. [💡 Pro Tips & Common Gotchas](#-pro-tips--common-gotchas)
-13. [🍳 Ready-to-Use Recipes](#-ready-to-use-recipes)
+12. [🧩 Projection Macros (`declare function`)](#-projection-macros-declare-function)
+13. [💡 Pro Tips & Common Gotchas](#-pro-tips--common-gotchas)
+14. [🍳 Ready-to-Use Recipes](#-ready-to-use-recipes)
 
 ---
 
@@ -472,6 +473,136 @@ from(pg.security_logs as s)
   .orderBy(s.logged_at, 'DESC')
   .limit(25)
   .offset(50);
+```
+
+---
+
+## 🧩 Projection Macros (`declare function`)
+
+Projection macros let you define a **named, reusable `.select()` body** at the top of your script. When you call the function inside `.select()`, the parser inlines the projection items at compile time — zero runtime overhead, no abstraction cost.
+
+### Syntax
+
+```ttql
+declare function <name>(<param>) {
+    return {
+        <param>.<column>,
+        <aggregate>(<param>.<column>) as <alias>,
+        ...
+    };
+}
+```
+
+> **Rules:**
+> - Declarations must appear **before `from()`**, alongside any `const` declarations.
+> - The function body must be a `return { ... }` object literal — only column references and aggregate expressions are valid.
+> - Exactly **one parameter** (the entity alias binding).
+> - Multiple `declare function` blocks are allowed per script.
+> - The macro can be **mixed with inline projections** in the same `.select()` call.
+
+---
+
+### Example — Order Statistics Macro
+
+```ttql
+declare function mapStatistics(o) {
+    return {
+        o.status,
+        count() as order_count,
+        sum(o.total_amount) as total_volume,
+        avg(o.total_amount) as average_ticket,
+        min(o.total_amount) as smallest_order,
+        max(o.total_amount) as largest_order
+    };
+}
+
+from(pg.orders as o)
+  .groupBy(o.status)
+  .select(mapStatistics(o));
+```
+
+This produces the same result as writing all six projections inline inside `.select()`.
+
+---
+
+### Example — Mixing a Macro with Inline Columns
+
+```ttql
+declare function mapStatistics(o) {
+    return {
+        o.status,
+        count() as order_count,
+        sum(o.total_amount) as total_volume
+    };
+}
+
+from(pg.orders as o)
+  .groupBy(o.status, o.region)
+  .select(mapStatistics(o), o.region);
+//                          ^^^^^^^^ extra inline column alongside the macro
+```
+
+---
+
+### Example — Multiple Macros in One Script
+
+```ttql
+declare function dimensions(o) {
+    return { o.status, o.region };
+}
+
+declare function metrics(o) {
+    return {
+        count() as order_count,
+        sum(o.total_amount) as revenue
+    };
+}
+
+from(pg.orders as o)
+  .groupBy(o.status, o.region)
+  .select(dimensions(o), metrics(o));
+```
+
+---
+
+### Alias Rebinding
+
+The parameter name in the declaration is just a placeholder. When you call the macro, you pass the actual entity alias used in your query — the parser substitutes it throughout:
+
+```ttql
+declare function summary(row) {
+    return { row.name, count() as cnt };
+}
+
+// 'p' is passed as the alias — 'row' is substituted to 'p' everywhere in the body
+from(pg.products as p)
+  .groupBy(p.name)
+  .select(summary(p));
+```
+
+---
+
+### Multi-Parameter Macros in Cross-Database Joins
+
+Macros can accept multiple parameters (or zero parameters) to rebind aliases across joined tables:
+
+```ttql
+declare function mapCustomerInformation(customer, activityLogs) {
+    return {
+        customer.customer_id,
+        customer.full_name,
+        s.carrier,
+        s.tracking_code,
+        activityLogs.event_type,
+        activityLogs.platform
+    }
+}
+
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id)
+  .innerJoin(mongo.user_activity_logs as l, on: c.customer_id == l.customer_id)
+  .where(c.customer_id == 'cust_101')
+  .select(mapCustomerInformation(c, l));
 ```
 
 ---

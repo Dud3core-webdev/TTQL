@@ -27,6 +27,7 @@ class TtqlDagPlanner {
 
     final Map<String, String> columnToStagingTable = {};
     final Map<String, int> stagingTableToStageIndex = {};
+    final Map<String, String> aliasToStagingTable = {};
 
     final List<TtqlQueryInvocationNode> rootQueries = List.from(script.rootInvocations);
 
@@ -51,6 +52,16 @@ class TtqlDagPlanner {
 
         final connDesc = environmentContext?.resolveAlias(resolvedConnId);
         final effectiveEngine = connDesc?.engineType ?? query.engineType;
+        final effectiveAlias = query.entityAlias ?? rawPredicate?.entityAlias ?? 'row';
+
+        aliasToStagingTable[stagingTable] = stagingTable;
+        aliasToStagingTable[query.targetTableOrCollection] = stagingTable;
+        aliasToStagingTable[effectiveAlias] = stagingTable;
+        for (final entry in script.entityAliases.entries) {
+          if (entry.value == query.targetTableOrCollection) {
+            aliasToStagingTable[entry.key] = stagingTable;
+          }
+        }
 
         final plannedStep = TtqlPlannedStep(
           stepId: 'step_${currentStageIndex}_$stepNumber',
@@ -58,9 +69,9 @@ class TtqlDagPlanner {
           connectionId: resolvedConnId,
           engineType: effectiveEngine,
           targetTableOrCollection: query.targetTableOrCollection,
-          projectedColumns: query.projectedColumns,
+          projectedColumns: List<String>.from(query.projectedColumns),
           stagingTableName: stagingTable,
-          entityAlias: rawPredicate?.entityAlias ?? 'row',
+          entityAlias: effectiveAlias,
           wherePredicate: resolvedPredicate,
         );
 
@@ -83,6 +94,8 @@ class TtqlDagPlanner {
       final resolvedConnId = _resolveConnectionId(target.connectionId, script);
       final safeTableName = target.targetTableOrCollection.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
       final stagingTable = '${TtqlConstants.stagingTablePrefix}${currentStageIndex}_$safeTableName';
+
+      final joinAlias = target.entityAlias ?? target.wherePredicate?.entityAlias ?? join.parentEntityAlias;
 
       final List<TtqlDependencyBinding> bindings = [];
       String? parentStagingTable;
@@ -109,7 +122,11 @@ class TtqlDagPlanner {
               localJoinCol = comp.fieldName;
               parentJoinCol = parentCol;
 
-              parentStagingTable = columnToStagingTable[parentCol];
+              final resolvedParentAlias = script.entityAliases[comp.rightFieldEntityAlias] ?? comp.rightFieldEntityAlias;
+              parentStagingTable = aliasToStagingTable[comp.rightFieldEntityAlias] ??
+                  aliasToStagingTable[resolvedParentAlias] ??
+                  aliasToStagingTable[join.parentEntityAlias] ??
+                  columnToStagingTable[parentCol];
 
               final rootStagingTable = stages[0]?.first.stagingTableName ?? '${TtqlConstants.stagingTablePrefix}0';
               parentStagingTable ??= rootStagingTable;
@@ -137,7 +154,12 @@ class TtqlDagPlanner {
           parentJoinCol = parentCol;
 
           final rootStagingTable = stages[0]?.first.stagingTableName ?? '${TtqlConstants.stagingTablePrefix}0';
-          parentStagingTable = columnToStagingTable[parentCol] ?? rootStagingTable;
+          final parentAlias = target.wherePredicate!.rightFieldEntityAlias ?? join.parentEntityAlias;
+          final resolvedParentAlias = script.entityAliases[parentAlias] ?? parentAlias;
+          parentStagingTable = aliasToStagingTable[parentAlias] ??
+              aliasToStagingTable[resolvedParentAlias] ??
+              columnToStagingTable[parentCol] ??
+              rootStagingTable;
 
           bindings.add(TtqlDependencyBinding(
             sourceStagingTable: parentStagingTable,
@@ -152,15 +174,32 @@ class TtqlDagPlanner {
       final joinConnDesc = environmentContext?.resolveAlias(resolvedConnId);
       final effectiveJoinEngine = joinConnDesc?.engineType ?? target.engineType;
 
+      final effectiveProjectedCols = List<String>.from(target.projectedColumns);
+      if (effectiveProjectedCols.isNotEmpty && localJoinCol != null && !effectiveProjectedCols.contains(localJoinCol)) {
+        effectiveProjectedCols.add(localJoinCol);
+      }
+
+      if (parentStagingTable != null && parentJoinCol != null) {
+        for (final stageList in stages.values) {
+          for (final stp in stageList) {
+            if (stp.stagingTableName == parentStagingTable) {
+              if (stp.projectedColumns.isNotEmpty && !stp.projectedColumns.contains(parentJoinCol)) {
+                stp.projectedColumns.add(parentJoinCol);
+              }
+            }
+          }
+        }
+      }
+
       final plannedStep = TtqlPlannedStep(
         stepId: 'step_${currentStageIndex}_join_$joinIdx',
         stageIndex: currentStageIndex,
         connectionId: resolvedConnId,
         engineType: effectiveJoinEngine,
         targetTableOrCollection: target.targetTableOrCollection,
-        projectedColumns: target.projectedColumns,
+        projectedColumns: effectiveProjectedCols,
         stagingTableName: stagingTable,
-        entityAlias: target.wherePredicate?.entityAlias ?? join.parentEntityAlias,
+        entityAlias: joinAlias,
         wherePredicate: directFilterPredicate,
         injectedDependencies: bindings,
         joinType: join.joinType,
@@ -171,7 +210,16 @@ class TtqlDagPlanner {
 
       stages[currentStageIndex] = [plannedStep];
 
-      for (final col in target.projectedColumns) {
+      aliasToStagingTable[stagingTable] = stagingTable;
+      aliasToStagingTable[target.targetTableOrCollection] = stagingTable;
+      aliasToStagingTable[joinAlias] = stagingTable;
+      for (final entry in script.entityAliases.entries) {
+        if (entry.value == target.targetTableOrCollection) {
+          aliasToStagingTable[entry.key] = stagingTable;
+        }
+      }
+
+      for (final col in effectiveProjectedCols) {
         columnToStagingTable[col] = stagingTable;
         stagingTableToStageIndex[stagingTable] = currentStageIndex;
       }

@@ -9,6 +9,7 @@ import 'package:ttql/models/ttql_query_invocation_node.dart';
 class TtqlScriptNode extends TtqlAstNode {
   final Map<String, dynamic> declaredConstants;
   final Map<String, String> connectionAliases;
+  final Map<String, String> entityAliases;
   final List<TtqlQueryInvocationNode> rootInvocations;
   final List<TtqlJoinNode> joins;
   final List<TtqlOrderByNode> orderBys;
@@ -21,6 +22,7 @@ class TtqlScriptNode extends TtqlAstNode {
   factory TtqlScriptNode({
     required Map<String, dynamic> declaredConstants,
     Map<String, String> connectionAliases = const {},
+    Map<String, String> entityAliases = const {},
     required List<TtqlQueryInvocationNode> rootInvocations,
     required List<TtqlJoinNode> joins,
     List<TtqlOrderByNode> orderBys = const [],
@@ -37,6 +39,7 @@ class TtqlScriptNode extends TtqlAstNode {
     return TtqlScriptNode._(
       declaredConstants: declaredConstants,
       connectionAliases: connectionAliases,
+      entityAliases: entityAliases,
       rootInvocations: rootInvocations,
       joins: joins,
       orderBys: effectiveOrderBys,
@@ -51,6 +54,7 @@ class TtqlScriptNode extends TtqlAstNode {
   const TtqlScriptNode._({
     required this.declaredConstants,
     this.connectionAliases = const {},
+    this.entityAliases = const {},
     required this.rootInvocations,
     required this.joins,
     this.orderBys = const [],
@@ -70,6 +74,7 @@ class TtqlScriptNode extends TtqlAstNode {
     return {
       'declaredConstants': declaredConstants,
       'connectionAliases': connectionAliases,
+      if (entityAliases.isNotEmpty) 'entityAliases': entityAliases,
       'rootInvocations': rootInvocations.map((i) => i.toJson()).toList(),
       'joins': joins.map((j) => j.toJson()).toList(),
       if (orderBys.isNotEmpty) 'orderBys': orderBys.map((o) => o.toJson()).toList(),
@@ -82,3 +87,4 @@ class TtqlScriptNode extends TtqlAstNode {
     };
   }
 }
+

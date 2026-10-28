@@ -383,4 +383,361 @@ from(pg.orders)
       );
     });
   });
+
+  group('declare function projection macros', () {
+    TtqlScriptNode _parse(String script) {
+      final tokens = TtqlLexer(script).tokenize();
+      return TtqlParser(tokens).parse();
+    }
+
+    test('Basic macro — mapStatistics produces all 6 projections', () {
+      const script = '''
+declare function mapStatistics(o) {
+    return {
+        o.status,
+        count() as order_count,
+        sum(o.total_amount) as total_volume,
+        avg(o.total_amount) as average_ticket,
+        min(o.total_amount) as smallest_order,
+        max(o.total_amount) as largest_order
+    };
 }
+
+from(pg.orders as o)
+  .groupBy(o.status)
+  .select(mapStatistics(o));
+''';
+      final ast = _parse(script);
+      final projs = ast.projections;
+
+      expect(projs.length, equals(6));
+
+      // First: column projection for o.status
+      final statusProj = projs[0] as TtqlColumnProjection;
+      expect(statusProj.columnName, equals('status'));
+      expect(statusProj.entityAlias, equals('o'));
+
+      // Remaining: aggregate projections
+      final aggs = projs.skip(1).cast<TtqlAggregateProjection>().toList();
+      expect(aggs[0].functionName, equals('COUNT'));
+      expect(aggs[0].alias, equals('order_count'));
+
+      expect(aggs[1].functionName, equals('SUM'));
+      expect(aggs[1].argumentColumn, equals('total_amount'));
+      expect(aggs[1].entityAlias, equals('o'));
+      expect(aggs[1].alias, equals('total_volume'));
+
+      expect(aggs[2].functionName, equals('AVG'));
+      expect(aggs[2].alias, equals('average_ticket'));
+
+      expect(aggs[3].functionName, equals('MIN'));
+      expect(aggs[3].alias, equals('smallest_order'));
+
+      expect(aggs[4].functionName, equals('MAX'));
+      expect(aggs[4].alias, equals('largest_order'));
+    });
+
+    test('Macro mixed with inline column — extra column appended after expansion', () {
+      const script = '''
+declare function mapStatistics(o) {
+    return {
+        o.status,
+        count() as order_count,
+        sum(o.total_amount) as total_volume
+    };
+}
+
+from(pg.orders as o)
+  .groupBy(o.status)
+  .select(mapStatistics(o), o.region);
+''';
+      final ast = _parse(script);
+      expect(ast.projections.length, equals(4));
+
+      // Last item should be the extra inline column
+      final last = ast.projections.last as TtqlColumnProjection;
+      expect(last.columnName, equals('region'));
+      expect(last.entityAlias, equals('o'));
+    });
+
+    test('Multiple declare functions — both usable in same query', () {
+      const script = '''
+declare function basicCols(o) {
+    return { o.id, o.status };
+}
+
+declare function aggregates(o) {
+    return { count() as cnt, sum(o.amount) as total };
+}
+
+from(pg.orders as o)
+  .groupBy(o.status)
+  .select(basicCols(o), aggregates(o));
+''';
+      final ast = _parse(script);
+      expect(ast.projections.length, equals(4));
+
+      expect((ast.projections[0] as TtqlColumnProjection).columnName, equals('id'));
+      expect((ast.projections[1] as TtqlColumnProjection).columnName, equals('status'));
+      expect((ast.projections[2] as TtqlAggregateProjection).functionName, equals('COUNT'));
+      expect((ast.projections[3] as TtqlAggregateProjection).functionName, equals('SUM'));
+    });
+
+    test('Alias rebinding — caller uses different alias than declared parameter', () {
+      const script = '''
+declare function summary(row) {
+    return { row.name, count() as cnt };
+}
+
+from(pg.products as p)
+  .groupBy(p.name)
+  .select(summary(p));
+''';
+      final ast = _parse(script);
+      expect(ast.projections.length, equals(2));
+
+      // entityAlias should be 'p' (the caller alias), not 'row' (the declared param)
+      final col = ast.projections[0] as TtqlColumnProjection;
+      expect(col.columnName, equals('name'));
+      expect(col.entityAlias, equals('p'));
+    });
+
+    test('Error: unknown macro called inside select() throws TtqlParseException', () {
+      const script = '''
+from(pg.orders as o)
+  .select(doesNotExist(o));
+''';
+      expect(
+        () => _parse(script),
+        throwsA(isA<TtqlParseException>()),
+      );
+    });
+
+    test('Error: empty function body throws TtqlParseException', () {
+      const script = '''
+declare function empty(o) {
+    return {};
+}
+
+from(pg.orders as o)
+  .select(empty(o));
+''';
+      expect(
+        () => _parse(script),
+        throwsA(isA<TtqlParseException>().having(
+          (e) => e.message,
+          'message',
+          contains('must return at least one'),
+        )),
+      );
+    });
+
+    test('Lexer: declare, function, return tokenise as keywords', () {
+      const script = 'declare function foo(x) { return { x.col }; }';
+      final tokens = TtqlLexer(script).tokenize();
+      expect(tokens.any((t) => t.type == TtqlTokenType.keyword && t.value == 'declare'), isTrue);
+      expect(tokens.any((t) => t.type == TtqlTokenType.keyword && t.value == 'function'), isTrue);
+      expect(tokens.any((t) => t.type == TtqlTokenType.keyword && t.value == 'return'), isTrue);
+    });
+
+    test('Multi-parameter macro: mapCustomerInformation(customer, activityLogs)', () {
+      const script = '''
+declare function mapCustomerInformation(customer, activityLogs) {
+    return {
+        customer.customer_id,
+        customer.full_name,
+        s.carrier,
+        s.tracking_code,
+        activityLogs.event_type,
+        activityLogs.platform
+    }
+}
+
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id)
+  .innerJoin(mongo.user_activity_logs as l, on: c.customer_id == l.customer_id)
+  .where(c.customer_id == 'cust_101')
+  .select(mapCustomerInformation(c, l));
+''';
+      final ast = _parse(script);
+      expect(ast.projections.length, equals(6));
+
+      final p0 = ast.projections[0] as TtqlColumnProjection;
+      expect(p0.columnName, equals('customer_id'));
+      expect(p0.entityAlias, equals('c')); // rebound from customer -> c
+
+      final p1 = ast.projections[1] as TtqlColumnProjection;
+      expect(p1.columnName, equals('full_name'));
+      expect(p1.entityAlias, equals('c')); // rebound from customer -> c
+
+      final p2 = ast.projections[2] as TtqlColumnProjection;
+      expect(p2.columnName, equals('carrier'));
+      expect(p2.entityAlias, equals('s')); // non-parameter s remains s
+
+      final p4 = ast.projections[4] as TtqlColumnProjection;
+      expect(p4.columnName, equals('event_type'));
+      expect(p4.entityAlias, equals('l')); // rebound from activityLogs -> l
+    });
+
+    test('Zero-parameter macro: mapAll() inlines body directly', () {
+      const script = '''
+declare function mapAll() {
+    return {
+        c.customer_id,
+        s.carrier
+    }
+}
+
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id)
+  .select(mapAll());
+''';
+      final ast = _parse(script);
+      expect(ast.projections.length, equals(2));
+      final p0 = ast.projections[0] as TtqlColumnProjection;
+      expect(p0.columnName, equals('customer_id'));
+      expect(p0.entityAlias, equals('c'));
+      final p1 = ast.projections[1] as TtqlColumnProjection;
+      expect(p1.columnName, equals('carrier'));
+      expect(p1.entityAlias, equals('s'));
+    });
+  });
+
+  group('Cross-Database Multi-Way Joins & Synthetic Staging Tests', () {
+    test('Three-Way Cross-Database Join (PostgreSQL + MySQL + MongoDB) with Selective Projections', () async {
+      final provider = CliConnectionProvider();
+      provider.registerConnection(
+        id: 'ecommerce_pg',
+        name: 'Postgres Ecommerce',
+        engineType: DbEngineType.postgres,
+        connectionString: 'postgres://localhost/ecommerce',
+        schemaOverview: {'customers': ['customer_id', 'full_name', 'email', 'country', 'created_at']},
+        mockData: [
+          {'customer_id': 'cust_101', 'full_name': 'Alice Smith', 'email': 'alice@example.com'},
+          {'customer_id': 'cust_102', 'full_name': 'Bob Jones', 'email': 'bob@example.com'},
+        ],
+      );
+
+      provider.registerConnection(
+        id: 'inventory_mysql',
+        name: 'MySQL Inventory',
+        engineType: DbEngineType.mysql,
+        connectionString: 'mysql://localhost/inventory',
+        schemaOverview: {'shipments': ['shipment_id', 'order_id', 'customer_id', 'carrier', 'tracking_code']},
+        mockData: [
+          {'shipment_id': 'ship_1', 'customer_id': 'cust_101', 'carrier': 'FedEx', 'tracking_code': 'FX123'},
+        ],
+      );
+
+      provider.registerConnection(
+        id: 'analytics_mongo_db',
+        name: 'Mongo Analytics',
+        engineType: DbEngineType.mongodb,
+        connectionString: 'mongodb://localhost/analytics',
+        schemaOverview: {'user_activity_logs': ['log_id', 'customer_id', 'event_type', 'platform']},
+        mockData: [
+          {'log_id': 'log_1', 'customer_id': 'cust_101', 'event_type': 'checkout_completed', 'platform': 'web'},
+        ],
+      );
+
+      const script = '''
+const pg = environment.connections.ecommerce_pg;
+const mysql = environment.connections.inventory_mysql;
+const mongo = environment.connections.analytics_mongo_db;
+
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id)
+  .innerJoin(mongo.user_activity_logs as l, on: c.customer_id == l.customer_id)
+  .where(c.customer_id == 'cust_101')
+  .select([
+    c.customer_id,
+    c.full_name,
+    s.carrier,
+    s.tracking_code,
+    l.event_type,
+    l.platform
+  ]);
+''';
+
+      // 1. Plan DAG
+      final tokens = TtqlLexer(script).tokenize();
+      final ast = TtqlParser(tokens).parse();
+      final plan = const TtqlDagPlanner().plan(ast);
+
+      expect(plan.stages.length, equals(3));
+      // Stage 1 (shipments) and Stage 2 (user_activity_logs) must include customer_id in planned projectedColumns
+      expect(plan.stages[1]!.first.projectedColumns, contains('customer_id'));
+      expect(plan.stages[2]!.first.projectedColumns, contains('customer_id'));
+      // Both joins must resolve to stage 0 (customers)
+      expect(plan.stages[1]!.first.parentStagingTable, equals('ttql_stage_0_customers'));
+      expect(plan.stages[2]!.first.parentStagingTable, equals('ttql_stage_0_customers'));
+
+      // 2. Execute End-to-End through TtqlEngine
+      final engine = TtqlEngine(connectionProvider: provider);
+      final result = await engine.executeScript(script);
+
+      expect(result.totalRowCount, equals(1));
+      final row = result.rows.first;
+      expect(row['customer_id'], equals('cust_101'));
+      expect(row['full_name'], equals('Alice Smith'));
+      expect(row['carrier'], equals('FedEx'));
+      expect(row['tracking_code'], equals('FX123'));
+      expect(row['event_type'], equals('checkout_completed'));
+      expect(row['platform'], equals('web'));
+    });
+
+    test('Chained Joins: Stage 2 joins to Stage 1 instead of Stage 0', () async {
+      const script = '''
+from(pg.customers as c)
+  .innerJoin(mysql.orders as o, on: c.customer_id == o.customer_id)
+  .innerJoin(mysql.order_items as oi, on: o.order_id == oi.order_id)
+  .select([
+    c.customer_id,
+    o.order_id,
+    oi.item_id
+  ]);
+''';
+      final tokens = TtqlLexer(script).tokenize();
+      final ast = TtqlParser(tokens).parse();
+      final plan = const TtqlDagPlanner().plan(ast);
+
+      expect(plan.stages.length, equals(3));
+      // Stage 1 (orders) parent is Stage 0 (customers)
+      expect(plan.stages[1]!.first.parentStagingTable, equals('ttql_stage_0_customers'));
+      expect(plan.stages[1]!.first.localJoinColumn, equals('customer_id'));
+      expect(plan.stages[1]!.first.parentJoinColumn, equals('customer_id'));
+
+      // Stage 2 (order_items) parent is Stage 1 (orders), NOT customers!
+      expect(plan.stages[2]!.first.parentStagingTable, equals('ttql_stage_1_orders'));
+      expect(plan.stages[2]!.first.localJoinColumn, equals('order_id'));
+      expect(plan.stages[2]!.first.parentJoinColumn, equals('order_id'));
+    });
+
+    test('Join Symmetry: Target on left (s.id == c.id) vs parent on left (c.id == s.id)', () {
+      const scriptA = '''
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id);
+''';
+      const scriptB = '''
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: s.customer_id == c.customer_id);
+''';
+
+      final astA = TtqlParser(TtqlLexer(scriptA).tokenize()).parse();
+      final astB = TtqlParser(TtqlLexer(scriptB).tokenize()).parse();
+
+      final planA = const TtqlDagPlanner().plan(astA);
+      final planB = const TtqlDagPlanner().plan(astB);
+
+      final stepA = planA.stages[1]!.first;
+      final stepB = planB.stages[1]!.first;
+
+      expect(stepA.localJoinColumn, equals('customer_id'));
+      expect(stepA.parentJoinColumn, equals('customer_id'));
+      expect(stepA.parentStagingTable, equals(stepB.parentStagingTable));
+      expect(stepB.localJoinColumn, equals('customer_id'));
+      expect(stepB.parentJoinColumn, equals('customer_id'));
+    });
+  });
+}
+
