@@ -5,3 +5,6 @@ editors/
 *.vsix
 doc/wiki/
 TTQL_COMPILER_WIKI.md
+connections.json
+example/connections.json
+sub_heap_js_runtime_spec.md

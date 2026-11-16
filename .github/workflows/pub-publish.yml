@@ -15,6 +15,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Install SQLite C-Runtime Header (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+
       - name: Setup Dart SDK
         uses: dart-lang/setup-dart@v1
         with:
@@ -31,3 +36,48 @@ jobs:
 
       - name: Publish to pub.dev
         run: dart pub publish --force
+
+  build-cli-binaries:
+    name: Build Native Binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            ext: ''
+          - os: macos-latest
+            target: macos-arm64
+            ext: ''
+          - os: windows-latest
+            target: windows-x64
+            ext: '.exe'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install SQLite C-Runtime Header (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+
+      - name: Setup Dart SDK
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install Dependencies
+        run: dart pub get
+
+      - name: Compile Standalone TTQL Binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          dart compile exe bin/ttql.dart -o "dist/ttql-${{ matrix.target }}${{ matrix.ext }}"
+
+      - name: Upload Native Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttql-${{ matrix.target }}
+          path: dist/ttql-${{ matrix.target }}${{ matrix.ext }}

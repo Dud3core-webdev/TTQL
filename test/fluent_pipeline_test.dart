@@ -738,6 +738,227 @@ from(pg.customers as c)
       expect(stepB.localJoinColumn, equals('customer_id'));
       expect(stepB.parentJoinColumn, equals('customer_id'));
     });
+
+    test('Qualified Array Constants & IN Spread Operator: Parses and executes Example 6 cleanly', () async {
+      const script = '''
+const pg = environment.connections.ecommerce_pg;
+const mysql = environment.connections.inventory_mysql;
+
+const productCols = [p.product_id, p.title, p.sku, p.price];
+const targetSkus = ['SKU-001', 'SKU-002', 'SKU-003'];
+
+from(pg.products as p)
+  .innerJoin(mysql.warehouse_stock as w, on: p.product_id == w.product_id)
+  .where(p.sku IN [...targetSkus] && w.quantity_on_hand >= 50)
+  .select([...productCols, w.warehouse_code, w.quantity_on_hand])
+  .orderBy(w.quantity_on_hand, 'DESC');
+''';
+
+      final ast = TtqlParser(TtqlLexer(script).tokenize()).parse();
+      expect(ast.constantValues['productCols'], equals(['p.product_id', 'p.title', 'p.sku', 'p.price']));
+      expect(ast.constantValues['targetSkus'], equals(['SKU-001', 'SKU-002', 'SKU-003']));
+
+      final colProjs = ast.projections.whereType<TtqlColumnProjection>().toList();
+      expect(colProjs.length, equals(6));
+      expect(colProjs[0].entityAlias, equals('p'));
+      expect(colProjs[0].columnName, equals('product_id'));
+      expect(colProjs[4].entityAlias, equals('w'));
+      expect(colProjs[4].columnName, equals('warehouse_code'));
+
+      final linter = const TtqlLinter();
+      final diagnostics = linter.lint(script);
+      expect(diagnostics.where((d) => d.severity == TtqlDiagnosticSeverity.error), isEmpty);
+
+      final provider = CliConnectionProvider();
+      provider.registerConnection(
+        id: 'ecommerce_pg',
+        name: 'Postgres Ecommerce',
+        engineType: DbEngineType.postgres,
+        connectionString: 'postgres://localhost/ecommerce',
+        schemaOverview: {'products': ['product_id', 'title', 'sku', 'price']},
+        mockData: [
+          {'product_id': 'prod_1', 'title': 'Mechanical Keyboard', 'sku': 'SKU-001', 'price': 149.99},
+        ],
+      );
+      provider.registerConnection(
+        id: 'inventory_mysql',
+        name: 'MySQL Inventory',
+        engineType: DbEngineType.mysql,
+        connectionString: 'mysql://localhost/inventory',
+        schemaOverview: {'warehouse_stock': ['product_id', 'warehouse_code', 'quantity_on_hand']},
+        mockData: [
+          {'product_id': 'prod_1', 'warehouse_code': 'WH-EAST', 'quantity_on_hand': 120},
+        ],
+      );
+
+      final plan = const TtqlDagPlanner().plan(ast);
+      final stage0Sql = SqlQueryDialect().buildQuery(
+        step: plan.stages[0]!.first,
+        foreignKeyLookup: (_, __) => [],
+        maxRows: 500,
+      );
+      expect(stage0Sql, contains("WHERE \"sku\" IN ('SKU-001', 'SKU-002', 'SKU-003')"));
+
+      final engine = TtqlEngine(connectionProvider: provider);
+      final result = await engine.executeScript(script);
+      expect(result.totalRowCount, equals(1));
+      expect(result.rows.first['sku'], equals('SKU-001'));
+      expect(result.rows.first['warehouse_code'], equals('WH-EAST'));
+      expect(result.rows.first['quantity_on_hand'], equals(120));
+    });
+
+    test('Parser Fail-Fast Guard: Malformed array constants and IN lists throw TtqlParseException instead of hanging', () {
+      const malformedScripts = [
+        'const x = [p.;',
+        'const x = [p.product_id, 1 + 2];',
+        '''
+const pg = environment.connections.ecommerce_pg;
+from(pg.products as p)
+  .where(p.sku IN [p.);
+''',
+        '''
+const pg = environment.connections.ecommerce_pg;
+from(pg.products as p)
+  .where(p.sku IN [...targetSkus]);
+''',
+      ];
+
+      final linter = const TtqlLinter();
+      for (final bad in malformedScripts) {
+        expect(
+          () => TtqlParser(TtqlLexer(bad).tokenize()).parse(),
+          throwsA(isA<TtqlParseException>()),
+        );
+        final diags = linter.lint(bad);
+        expect(diags.any((d) => d.severity == TtqlDiagnosticSeverity.error), isTrue);
+      }
+    });
+
+    test('SqlQueryDialect & SqlExpressionVisitor: Uses unquoted identifiers for Oracle/Cassandra and quoted elsewhere', () {
+      final dialect = SqlQueryDialect();
+      const oraStep = TtqlPlannedStep(
+        stepId: 'step_3_join_2',
+        stageIndex: 3,
+        connectionId: '1794845612716',
+        engineType: DbEngineType.oracle,
+        targetTableOrCollection: 'ledger_transactions',
+        projectedColumns: ['account_code', 'debit', 'invoice_id'],
+        stagingTableName: 'ttql_stage_3_ledger_transactions',
+        injectedDependencies: [
+          TtqlDependencyBinding(
+            sourceStagingTable: 'ttql_stage_1_invoices',
+            sourceColumn: 'invoice_id',
+            targetFilterField: 'invoice_id',
+          ),
+        ],
+      );
+
+      final oraSql = dialect.buildQuery(
+        step: oraStep,
+        foreignKeyLookup: (_, __) => ['inv_5001', 'inv_5002'],
+        maxRows: 500,
+      );
+      expect(oraSql, equals("SELECT account_code, debit, invoice_id FROM ledger_transactions WHERE invoice_id IN ('inv_5001', 'inv_5002') LIMIT 500"));
+
+      const cqlStep = TtqlPlannedStep(
+        stepId: 'step_2_join_1',
+        stageIndex: 1,
+        connectionId: 'scylla_conn',
+        engineType: DbEngineType.cassandra,
+        targetTableOrCollection: 'device_metrics',
+        projectedColumns: ['device_model', 'battery_level', 'customer_id'],
+        stagingTableName: 'ttql_stage_2_device_metrics',
+        injectedDependencies: [
+          TtqlDependencyBinding(
+            sourceStagingTable: 'ttql_stage_0_customers',
+            sourceColumn: 'customer_id',
+            targetFilterField: 'customer_id',
+          ),
+        ],
+      );
+      final cqlSql = dialect.buildQuery(
+        step: cqlStep,
+        foreignKeyLookup: (_, __) => ['cust_101', 'cust_102'],
+        maxRows: 500,
+      );
+      expect(
+        cqlSql,
+        equals("SELECT device_model, battery_level, customer_id FROM device_metrics WHERE customer_id IN ('cust_101', 'cust_102') LIMIT 500 ALLOW FILTERING"),
+      );
+
+      final cqlExpr = SqlExpressionVisitor.translate(
+        const TtqlComparisonExpression(fieldName: 'status', operator: '=', rightOperand: 'ACTIVE'),
+        DbEngineType.cassandra,
+      );
+      expect(cqlExpr.sqlClause, equals('status = ?'));
+
+      final pgExpr = SqlExpressionVisitor.translate(
+        const TtqlComparisonExpression(fieldName: 'status', operator: '=', rightOperand: 'ACTIVE'),
+        DbEngineType.postgres,
+      );
+      expect(pgExpr.sqlClause, equals('"status" = \$1'));
+
+      final mysqlExpr = SqlExpressionVisitor.translate(
+        const TtqlComparisonExpression(fieldName: 'status', operator: '=', rightOperand: 'ACTIVE'),
+        DbEngineType.mysql,
+      );
+      expect(mysqlExpr.sqlClause, equals('`status` = ?'));
+    });
+
+    test('TtqlEphemeralStagingDatabase: Resolves uppercase Oracle staged column names case-insensitively', () {
+      final staging = TtqlEphemeralStagingDatabase();
+      try {
+        const steps = [
+          TtqlPlannedStep(
+            stepId: 'step_0',
+            stageIndex: 0,
+            connectionId: 'pg',
+            engineType: DbEngineType.postgres,
+            targetTableOrCollection: 'invoices',
+            projectedColumns: ['invoice_id'],
+            stagingTableName: 'ttql_stage_0_invoices',
+            entityAlias: 'i',
+          ),
+          TtqlPlannedStep(
+            stepId: 'step_1',
+            stageIndex: 1,
+            connectionId: 'ora',
+            engineType: DbEngineType.oracle,
+            targetTableOrCollection: 'ledger_transactions',
+            projectedColumns: ['account_code', 'debit', 'invoice_id'],
+            stagingTableName: 'ttql_stage_1_ledger_transactions',
+            entityAlias: 'l',
+            joinType: 'leftJoin',
+            parentStagingTable: 'ttql_stage_0_invoices',
+            parentJoinColumn: 'invoice_id',
+            localJoinColumn: 'invoice_id',
+          ),
+        ];
+
+        staging.createStagingTable('ttql_stage_0_invoices', ['invoice_id']);
+        staging.insertStagingRows('ttql_stage_0_invoices', [
+          {'invoice_id': 'inv_5001'},
+        ]);
+        staging.createStagingTable('ttql_stage_1_ledger_transactions', ['ACCOUNT_CODE', 'DEBIT', 'INVOICE_ID']);
+        staging.insertStagingRows('ttql_stage_1_ledger_transactions', [
+          {'ACCOUNT_CODE': '4000-REV', 'DEBIT': 250.5, 'INVOICE_ID': 'inv_5001'},
+        ]);
+
+        final rows = staging.executeFinalSyntheticJoin(
+          steps,
+          projections: const [
+            TtqlColumnProjection(entityAlias: 'i', columnName: 'invoice_id'),
+            TtqlColumnProjection(entityAlias: 'l', columnName: 'account_code'),
+            TtqlColumnProjection(entityAlias: 'l', columnName: 'debit'),
+          ],
+        );
+
+        expect(rows.length, equals(1));
+        expect(rows.first['invoice_id'], equals('inv_5001'));
+      } finally {
+        staging.dispose();
+      }
+    });
   });
 }
 

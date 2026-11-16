@@ -112,13 +112,19 @@ class TtqlEphemeralStagingDatabase {
     List<TtqlPlannedStep> allSteps, {
     String? entityAlias,
   }) {
+    final lowerCol = colName.toLowerCase();
+    bool hasColumn(Iterable<String> cols) {
+      if (cols.contains(colName)) return true;
+      return cols.any((c) => c.toLowerCase() == lowerCol);
+    }
+
     if (entityAlias != null) {
       for (final step in allSteps) {
         if (step.entityAlias == entityAlias ||
             step.targetTableOrCollection == entityAlias ||
             step.stagingTableName.endsWith('_$entityAlias')) {
           final stagedCols = _stagedTableColumns[step.stagingTableName] ?? step.projectedColumns;
-          if (stagedCols.isEmpty || stagedCols.contains(colName)) {
+          if (stagedCols.isEmpty || hasColumn(stagedCols)) {
             return step.stagingTableName;
           }
         }
@@ -127,13 +133,13 @@ class TtqlEphemeralStagingDatabase {
 
     for (final step in allSteps) {
       final stagedCols = _stagedTableColumns[step.stagingTableName] ?? [];
-      if (stagedCols.contains(colName)) {
+      if (hasColumn(stagedCols)) {
         return step.stagingTableName;
       }
     }
 
     for (final step in allSteps) {
-      if (step.projectedColumns.contains(colName)) {
+      if (hasColumn(step.projectedColumns)) {
         return step.stagingTableName;
       }
     }

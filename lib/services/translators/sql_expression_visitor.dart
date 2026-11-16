@@ -25,6 +25,20 @@ class SqlExpressionVisitor {
 
   SqlExpressionVisitor(this.engineType);
 
+  /// Returns the identifier quote character for [engineType].
+  ///
+  /// Oracle and Cassandra/ScyllaDB use unquoted identifiers so unquoted DDL
+  /// names fold to their native case without requiring exact case matching.
+  static String identifierQuoteForEngine(DbEngineType engineType) {
+    if (engineType == DbEngineType.mysql || engineType == DbEngineType.planetscale) {
+      return '`';
+    }
+    if (engineType == DbEngineType.oracle || engineType == DbEngineType.cassandra) {
+      return '';
+    }
+    return '"';
+  }
+
   /// Translates an expression tree into a [SqlExpressionResult].
   static SqlExpressionResult translate(TtqlExpression expr, DbEngineType engineType) {
     final visitor = SqlExpressionVisitor(engineType);
@@ -57,7 +71,7 @@ class SqlExpressionVisitor {
       final innerSql = _visit(expr.inner);
       return '($innerSql)';
     } else if (expr is TtqlComparisonExpression) {
-      final quote = (engineType == DbEngineType.mysql || engineType == DbEngineType.planetscale) ? '`' : '"';
+      final quote = identifierQuoteForEngine(engineType);
       final fieldCol = '$quote${expr.fieldName}$quote';
 
       if (expr.isRightOperandFieldReference) {

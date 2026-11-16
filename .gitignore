@@ -16,3 +16,8 @@ editors/vscode/*.vsix
 Thumbs.db
 *.tmp
 *.log
+
+# Local Connection Configs & Unrelated Scratch Specs
+connections.json
+example/connections.json
+sub_heap_js_runtime_spec.md

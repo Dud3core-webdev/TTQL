@@ -1,10 +1,27 @@
 # TTQL (TableTalk Query Language)
 
-[![Dart CI](https://github.com/tabletalk-io/ttql/actions/workflows/ttql-ci.yml/badge.svg)](https://github.com/tabletalk-io/ttql/actions/workflows/ttql-ci.yml)
+[![Dart CI](https://github.com/tabletalk-io/ttql/actions/workflows/ci.yml/badge.svg)](https://github.com/tabletalk-io/ttql/actions/workflows/ci.yml)
 [![pub package](https://img.shields.io/pub/v/ttql.svg)](https://pub.dev/packages/ttql)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 TTQL (TableTalk Query Language) is a federated, cross-database query engine and AST parser written in pure Dart. It enables executing read-only analytical queries that join data across heterogeneous database systems (PostgreSQL, MySQL, SQLite, MongoDB, Redis) in a single script.
+
+```ttql
+const pg = environment.connections.ecommerce_pg;
+const mysql = environment.connections.inventory_mysql;
+const mongo = environment.connections.analytics_mongo;
+
+from(pg.customers as c)
+  .innerJoin(mysql.shipments as s, on: c.customer_id == s.customer_id)
+  .leftJoin(mongo.events as e, on: c.customer_id == e.customer_id)
+  .where(c.country == 'US' && s.status == 'in_transit')
+  .select([c.customer_id, c.email, s.carrier, e.event_type])
+  .limit(25);
+```
+
+> **Official Visual Client & Local-AI Workspace — [TableTalk Studio](https://tabletalk.io)**
+>
+> `ttql` is 100% open source (CLI, LSP server, VS Code extension, and Dart compiler library). When you want a turnkey desktop/mobile GUI built around TTQL — featuring **OS Keychain credential vaulting**, **1-click Server Pool discovery**, **visual cross-DB ERD graphs**, and **local Ollama AI query generation & `EXPLAIN ANALYZE` profiling** — check out [TableTalk Studio](https://tabletalk.io).
 
 ---
 

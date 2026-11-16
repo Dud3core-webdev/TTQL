@@ -151,6 +151,7 @@ class TtqlParser {
       _advance(); // Consume '['
       final list = <dynamic>[];
       while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
+        final loopStart = _current;
         if (_check(TtqlTokenType.operator) && _peek().value == '...') {
           _advance();
           final spreadToken = _consume(TtqlTokenType.identifier, 'Expected identifier after spread operator "..."');
@@ -164,17 +165,42 @@ class TtqlParser {
               column: spreadToken.column,
             );
           }
-        } else if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
-          final t = _advance().value;
-          list.add(t);
+        } else if (_check(TtqlTokenType.stringLiteral)) {
+          list.add(_advance().value);
+        } else if (_check(TtqlTokenType.identifier)) {
+          final firstToken = _advance();
+          if (!_isAtEnd() &&
+              (_check(TtqlTokenType.punctuation) || _check(TtqlTokenType.operator)) &&
+              _peek().value == '.') {
+            _advance(); // Consume '.'
+            final fieldToken = _consume(TtqlTokenType.identifier, 'Expected field name after "." in array constant');
+            list.add('${firstToken.value}.${fieldToken.value}');
+          } else {
+            list.add(firstToken.value);
+          }
         } else if (_check(TtqlTokenType.numberLiteral)) {
           final numToken = _advance();
           list.add(num.tryParse(numToken.value) ?? numToken.value);
         } else if (_check(TtqlTokenType.booleanLiteral)) {
           list.add(_advance().value == 'true');
+        } else {
+          final unexpected = _peek();
+          throw TtqlParseException(
+            'Unexpected token "${unexpected.value}" in constant array',
+            line: unexpected.line,
+            column: unexpected.column,
+          );
         }
         if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
           _advance();
+        }
+        if (_current == loopStart) {
+          final stuck = _peek();
+          throw TtqlParseException(
+            'Unexpected token "${stuck.value}" in constant array',
+            line: stuck.line,
+            column: stuck.column,
+          );
         }
       }
       _consumePunctuation(']', 'Expected "]" closing array in constant');
@@ -323,17 +349,61 @@ class TtqlParser {
         _advance();
         final inList = <dynamic>[];
         while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
-          if (_check(TtqlTokenType.stringLiteral) || _check(TtqlTokenType.identifier)) {
-            final val = _advance().value;
-            inList.add(_constantValues[val] ?? val);
+          final loopStart = _current;
+          if (_check(TtqlTokenType.operator) && _peek().value == '...') {
+            _advance();
+            final spreadToken = _consume(TtqlTokenType.identifier, 'Expected identifier after spread operator "..."');
+            final spreadVal = _constantValues[spreadToken.value];
+            if (spreadVal is List) {
+              inList.addAll(spreadVal);
+            } else {
+              throw TtqlParseException(
+                'Cannot spread non-list constant "${spreadToken.value}" into IN array',
+                line: spreadToken.line,
+                column: spreadToken.column,
+              );
+            }
+          } else if (_check(TtqlTokenType.stringLiteral)) {
+            inList.add(_advance().value);
+          } else if (_check(TtqlTokenType.identifier)) {
+            final firstToken = _advance();
+            if (!_isAtEnd() &&
+                (_check(TtqlTokenType.punctuation) || _check(TtqlTokenType.operator)) &&
+                _peek().value == '.') {
+              _advance(); // Consume '.'
+              final fieldToken = _consume(TtqlTokenType.identifier, 'Expected field name after "." in IN array');
+              inList.add('${firstToken.value}.${fieldToken.value}');
+            } else {
+              final resolved = _constantValues[firstToken.value];
+              if (resolved is List) {
+                inList.addAll(resolved);
+              } else {
+                inList.add(resolved ?? firstToken.value);
+              }
+            }
           } else if (_check(TtqlTokenType.numberLiteral)) {
             final numToken = _advance();
             inList.add(num.tryParse(numToken.value) ?? numToken.value);
           } else if (_check(TtqlTokenType.booleanLiteral)) {
             inList.add(_advance().value == 'true');
+          } else {
+            final unexpected = _peek();
+            throw TtqlParseException(
+              'Unexpected token "${unexpected.value}" inside IN list',
+              line: unexpected.line,
+              column: unexpected.column,
+            );
           }
           if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
             _advance();
+          }
+          if (_current == loopStart) {
+            final stuck = _peek();
+            throw TtqlParseException(
+              'Unexpected token "${stuck.value}" inside IN list',
+              line: stuck.line,
+              column: stuck.column,
+            );
           }
         }
         _consumePunctuation(']', 'Expected "]" closing IN array');
@@ -894,13 +964,23 @@ class TtqlParser {
     if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
       _advance(); // consume '['
       while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
+        final loopStart = _current;
         if (_check(TtqlTokenType.operator) && _peek().value == '...') {
           _advance();
           final id = _consume(TtqlTokenType.identifier, 'Expected identifier after "..."').value;
           final val = _constantValues[id];
           if (val is List) {
             for (final v in val) {
-              items.add(TtqlColumnProjection(columnName: v.toString()));
+              final raw = v.toString();
+              final dotIndex = raw.indexOf('.');
+              if (dotIndex > 0 && dotIndex < raw.length - 1) {
+                items.add(TtqlColumnProjection(
+                  entityAlias: raw.substring(0, dotIndex),
+                  columnName: raw.substring(dotIndex + 1),
+                ));
+              } else {
+                items.add(TtqlColumnProjection(columnName: raw));
+              }
             }
           }
         } else if (_isMacroCall()) {
@@ -911,10 +991,19 @@ class TtqlParser {
         if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
           _advance();
         }
+        if (_current == loopStart) {
+          final stuck = _peek();
+          throw TtqlParseException(
+            'Unexpected token "${stuck.value}" in select array',
+            line: stuck.line,
+            column: stuck.column,
+          );
+        }
       }
       _consumePunctuation(']', 'Expected "]" closing select array');
     } else {
       while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+        final loopStart = _current;
         if (_isMacroCall()) {
           items.addAll(_expandMacroCall(defaultEntity));
         } else {
@@ -924,6 +1013,14 @@ class TtqlParser {
           _advance();
         } else {
           break;
+        }
+        if (_current == loopStart) {
+          final stuck = _peek();
+          throw TtqlParseException(
+            'Unexpected token "${stuck.value}" in select arguments',
+            line: stuck.line,
+            column: stuck.column,
+          );
         }
       }
     }
@@ -1129,19 +1226,37 @@ class TtqlParser {
     if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
       _advance(); // '['
       while (!(_check(TtqlTokenType.punctuation) && _peek().value == ']') && !_isAtEnd()) {
+        final loopStart = _current;
         groupCols.add(_parseSingleGroupCol(defaultEntity));
         if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
           _advance();
+        }
+        if (_current == loopStart) {
+          final stuck = _peek();
+          throw TtqlParseException(
+            'Unexpected token "${stuck.value}" in groupBy array',
+            line: stuck.line,
+            column: stuck.column,
+          );
         }
       }
       _consumePunctuation(']', 'Expected "]" closing groupBy array');
     } else {
       while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+        final loopStart = _current;
         groupCols.add(_parseSingleGroupCol(defaultEntity));
         if (_check(TtqlTokenType.punctuation) && _peek().value == ',') {
           _advance();
         } else {
           break;
+        }
+        if (_current == loopStart) {
+          final stuck = _peek();
+          throw TtqlParseException(
+            'Unexpected token "${stuck.value}" in groupBy arguments',
+            line: stuck.line,
+            column: stuck.column,
+          );
         }
       }
     }
@@ -1189,6 +1304,7 @@ class TtqlParser {
     final List<TtqlOrderByNode> orderBys = [];
 
     while (!(_check(TtqlTokenType.punctuation) && _peek().value == ')') && !_isAtEnd()) {
+      final loopStart = _current;
       if (_check(TtqlTokenType.punctuation) && _peek().value == '[') {
         _advance(); // '['
         final node = _parseSingleOrderBy(defaultEntity);
@@ -1202,6 +1318,14 @@ class TtqlParser {
         _advance();
       } else {
         break;
+      }
+      if (_current == loopStart) {
+        final stuck = _peek();
+        throw TtqlParseException(
+          'Unexpected token "${stuck.value}" in orderBy arguments',
+          line: stuck.line,
+          column: stuck.column,
+        );
       }
     }
 

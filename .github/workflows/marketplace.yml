@@ -19,6 +19,9 @@ on:
 jobs:
   package-and-publish:
     runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
     defaults:
       run:
         working-directory: editors/vscode
@@ -48,12 +51,8 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         if: ${{ (github.event_name == 'release' || inputs.publish_marketplace == true) && env.VSCE_PAT != '' }}
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx @vscode/vsce publish -p $VSCE_PAT
+        run: npx @vscode/vsce publish -p "$VSCE_PAT"
 
       - name: Publish to Open VSX Registry
         if: ${{ (github.event_name == 'release' || inputs.publish_openvsx == true) && env.OVSX_PAT != '' }}
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: npx ovsx publish -p $OVSX_PAT
+        run: npx ovsx publish -p "$OVSX_PAT"

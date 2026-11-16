@@ -14,7 +14,7 @@ class SqlQueryDialect extends QueryDialectStrategy {
     required List<dynamic> Function(String stagingTable, String column) foreignKeyLookup,
     required int maxRows,
   }) {
-    final String quote = (step.engineType == DbEngineType.mysql || step.engineType == DbEngineType.planetscale) ? '`' : '"';
+    final String quote = SqlExpressionVisitor.identifierQuoteForEngine(step.engineType);
     final cleanTable = step.targetTableOrCollection.replaceAll("'", "").replaceAll('"', '').trim();
     final buffer = StringBuffer();
     buffer.write('SELECT ');
@@ -32,7 +32,11 @@ class SqlQueryDialect extends QueryDialectStrategy {
     for (final dep in step.injectedDependencies) {
       final fkValues = foreignKeyLookup(dep.sourceStagingTable, dep.sourceColumn);
       if (fkValues.isEmpty) {
-        whereClauses.add('1 = 0');
+        if (step.engineType == DbEngineType.cassandra) {
+          whereClauses.add("$quote${dep.targetFilterField}$quote = '__ttql_empty__'");
+        } else {
+          whereClauses.add('1 = 0');
+        }
       } else {
         final formattedValues = fkValues.map((v) => "'${v.toString().replaceAll("'", "''")}'").join(', ');
         whereClauses.add('$quote${dep.targetFilterField}$quote IN ($formattedValues)');
@@ -64,6 +68,9 @@ class SqlQueryDialect extends QueryDialectStrategy {
     }
 
     buffer.write(' LIMIT $maxRows');
+    if (step.engineType == DbEngineType.cassandra && whereClauses.isNotEmpty) {
+      buffer.write(' ALLOW FILTERING');
+    }
     return buffer.toString();
   }
 }

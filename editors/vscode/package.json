@@ -60,7 +60,17 @@
         "scopeName": "source.ttql",
         "path": "./syntaxes/ttql.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "TTQL",
+      "properties": {
+        "ttql.lsp.executablePath": {
+          "type": "string",
+          "default": "ttql",
+          "description": "Path to the ttql CLI binary used to launch the Language Server Protocol daemon (`ttql lsp`)."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

@@ -1,4 +1,3 @@
-import * as path from 'path';
 import { workspace, ExtensionContext } from 'vscode';
 import {
   LanguageClient,
@@ -9,10 +8,16 @@ import {
 
 let client: LanguageClient;
 
-export function activate(context: ExtensionContext) {
+export function activate(_context: ExtensionContext) {
+  const configuredPath = workspace
+    .getConfiguration('ttql')
+    .get<string>('lsp.executablePath', 'ttql')
+    .trim();
+  const executableCommand = configuredPath.length > 0 ? configuredPath : 'ttql';
+
   // Executable options to spawn `ttql lsp`
   const serverExecutable: Executable = {
-    command: 'ttql',
+    command: executableCommand,
     args: ['lsp'],
     options: {
       cwd: workspace.workspaceFolders?.[0]?.uri.fsPath
