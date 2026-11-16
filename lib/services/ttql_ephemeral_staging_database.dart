@@ -37,6 +37,17 @@ class TtqlEphemeralStagingDatabase {
     _db!.execute('CREATE TABLE IF NOT EXISTS "$tableName" ($colDefs);');
   }
 
+  static final RegExp _decimalStringPattern = RegExp(r'^-?(?:0|[1-9]\d*)\.\d+$');
+
+  static dynamic _coerceDecimalValue(dynamic value) {
+    if (value == null || value is num || value is bool) return value;
+    final str = value.toString();
+    if (_decimalStringPattern.hasMatch(str)) {
+      return double.tryParse(str) ?? str;
+    }
+    return str;
+  }
+
   /// Ingests a batch of normalized row maps into the specified staging table within a single transaction.
   void insertStagingRows(String tableName, List<Map<String, dynamic>> rows, {List<String>? fallbackColumns}) {
     _ensureNotDisposed();
@@ -60,12 +71,7 @@ class TtqlEphemeralStagingDatabase {
     try {
       _db!.execute('BEGIN TRANSACTION;');
       for (final row in rows) {
-        final values = detectedColumns.map((col) {
-          final val = row[col];
-          if (val == null) return null;
-          if (val is num || val is bool) return val;
-          return val.toString();
-        }).toList();
+        final values = detectedColumns.map((col) => _coerceDecimalValue(row[col])).toList();
 
         statement.execute(values);
       }
@@ -147,26 +153,70 @@ class TtqlEphemeralStagingDatabase {
     return null;
   }
 
-  String _renderExpression(TtqlExpression expr) {
+  bool _allExpressionColumnsExist(TtqlExpression expr, List<String> stagedCols) {
     if (expr is TtqlBinaryLogicalExpression) {
-      final left = _renderExpression(expr.left);
-      final right = _renderExpression(expr.right);
+      return _allExpressionColumnsExist(expr.left, stagedCols) &&
+          _allExpressionColumnsExist(expr.right, stagedCols);
+    }
+    if (expr is TtqlUnaryLogicalExpression) {
+      return _allExpressionColumnsExist(expr.operand, stagedCols);
+    }
+    if (expr is TtqlGroupExpression) {
+      return _allExpressionColumnsExist(expr.inner, stagedCols);
+    }
+    if (expr is TtqlComparisonExpression) {
+      if (expr.isRightOperandFieldReference) return false;
+      final lower = expr.fieldName.toLowerCase();
+      return stagedCols.any((c) => c.toLowerCase() == lower);
+    }
+    return false;
+  }
+
+  String _formatSqlLiteral(dynamic val) {
+    if (val is bool) return val ? '1' : '0';
+    final coerced = _coerceDecimalValue(val);
+    if (coerced is num) return '$coerced';
+    return "'${coerced.toString().replaceAll("'", "''")}'";
+  }
+
+  String _renderExpression(TtqlExpression expr, {String? tableQualification}) {
+    if (expr is TtqlBinaryLogicalExpression) {
+      final left = _renderExpression(expr.left, tableQualification: tableQualification);
+      final right = _renderExpression(expr.right, tableQualification: tableQualification);
+      if (left.isEmpty || right.isEmpty) return '';
       return '($left ${expr.operator} $right)';
     } else if (expr is TtqlUnaryLogicalExpression) {
-      final child = _renderExpression(expr.operand);
+      final child = _renderExpression(expr.operand, tableQualification: tableQualification);
+      if (child.isEmpty) return '';
       return '(NOT $child)';
     } else if (expr is TtqlGroupExpression) {
-      final inner = _renderExpression(expr.inner);
+      final inner = _renderExpression(expr.inner, tableQualification: tableQualification);
+      if (inner.isEmpty) return '';
       return '($inner)';
     } else if (expr is TtqlComparisonExpression) {
-      final field = expr.fieldName.contains('(') ? expr.fieldName : '"${expr.fieldName}"';
+      final colName = expr.fieldName;
+      final String field;
+      if (colName.contains('(')) {
+        field = colName;
+      } else if (tableQualification != null) {
+        field = '"$tableQualification"."$colName"';
+      } else {
+        field = '"$colName"';
+      }
       final val = expr.rightOperand;
       if (val == null) {
         if (expr.operator == '=') return '$field IS NULL';
         if (expr.operator == '!=') return '$field IS NOT NULL';
       }
-      final formatted = (val is num || val is bool) ? '$val' : "'${val.toString().replaceAll("'", "''")}'";
-      return '$field ${expr.operator} $formatted';
+      if (expr.operator == 'IN' || expr.operator == 'NOT IN') {
+        final items = val is List ? val : [val];
+        if (items.isEmpty) {
+          return expr.operator == 'IN' ? '1 = 0' : '1 = 1';
+        }
+        final formattedList = items.map(_formatSqlLiteral).join(', ');
+        return '$field ${expr.operator} ($formattedList)';
+      }
+      return '$field ${expr.operator} ${_formatSqlLiteral(val)}';
     }
     return '';
   }
@@ -275,6 +325,45 @@ class TtqlEphemeralStagingDatabase {
       }
 
       buffer.write(' $joinTypeSql "${jStep.stagingTableName}" ON "${jStep.stagingTableName}"."$localCol" = "$parentTable"."$parentCol"');
+      if (jt == 'leftjoin' &&
+          jStep.wherePredicate != null &&
+          !jStep.wherePredicate!.isRightOperandFieldReference) {
+        final stagedCols = _stagedTableColumns[jStep.stagingTableName] ?? const <String>[];
+        if (_allExpressionColumnsExist(jStep.wherePredicate!.rootExpression, stagedCols)) {
+          final joinFilterSql = _renderExpression(
+            jStep.wherePredicate!.rootExpression,
+            tableQualification: jStep.stagingTableName,
+          );
+          if (joinFilterSql.isNotEmpty) {
+            buffer.write(' AND ($joinFilterSql)');
+          }
+        }
+      }
+    }
+
+    // 3b. Defense-in-depth WHERE enforcement for root & inner/right/full-outer stages
+    final List<String> stageWhereClauses = [];
+    void appendStageWhere(TtqlPlannedStep step) {
+      if (step.wherePredicate == null || step.wherePredicate!.isRightOperandFieldReference) return;
+      final stagedCols = _stagedTableColumns[step.stagingTableName] ?? const <String>[];
+      if (!_allExpressionColumnsExist(step.wherePredicate!.rootExpression, stagedCols)) return;
+      final sql = _renderExpression(
+        step.wherePredicate!.rootExpression,
+        tableQualification: allSteps.length > 1 ? step.stagingTableName : null,
+      );
+      if (sql.isNotEmpty) {
+        stageWhereClauses.add('($sql)');
+      }
+    }
+
+    appendStageWhere(rootStep);
+    for (final jStep in joinSteps) {
+      if (jStep.joinType?.toLowerCase() != 'leftjoin') {
+        appendStageWhere(jStep);
+      }
+    }
+    if (stageWhereClauses.isNotEmpty) {
+      buffer.write(' WHERE ${stageWhereClauses.join(' AND ')}');
     }
 
     // 4. GROUP BY
@@ -308,12 +397,28 @@ class TtqlEphemeralStagingDatabase {
       final List<String> orderClauses = [];
       for (final ob in effectiveOrderBys) {
         final dir = ob.direction;
-        final targetTable = _resolveColumnStagingTable(ob.fieldName, allSteps, entityAlias: ob.entityAlias);
-        if (targetTable != null && allSteps.length > 1) {
-          orderClauses.add('"$targetTable"."${ob.fieldName}" $dir');
-        } else {
+        final isProjectionAlias = projections != null &&
+            projections.any(
+              (p) =>
+                  (p is TtqlColumnProjection && p.alias == ob.fieldName) ||
+                  (p is TtqlAggregateProjection && (p.alias == ob.fieldName || p.outputName == ob.fieldName)),
+            );
+        if (isProjectionAlias) {
           orderClauses.add('"${ob.fieldName}" $dir');
+          continue;
         }
+        final targetTable = _resolveColumnStagingTable(ob.fieldName, allSteps, entityAlias: ob.entityAlias);
+        final colRef = (targetTable != null && allSteps.length > 1)
+            ? '"$targetTable"."${ob.fieldName}"'
+            : '"${ob.fieldName}"';
+        orderClauses.add(
+          "CASE WHEN typeof($colRef) IN ('integer', 'real') THEN $colRef "
+          "WHEN ($colRef GLOB '[0-9]*' OR $colRef GLOB '-[0-9]*') "
+          "AND NOT $colRef GLOB '*[^0-9.-]*' "
+          "AND $colRef NOT GLOB '*.*.*' "
+          "AND NOT substr($colRef, 2) GLOB '*-*' "
+          "THEN CAST($colRef AS REAL) ELSE $colRef END $dir",
+        );
       }
       buffer.write(' ORDER BY ${orderClauses.join(', ')}');
     }

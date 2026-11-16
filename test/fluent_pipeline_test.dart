@@ -959,6 +959,104 @@ from(pg.products as p)
         staging.dispose();
       }
     });
+
+    test('TtqlEphemeralStagingDatabase: Sorts NUMERIC decimal strings numerically in ORDER BY', () {
+      final staging = TtqlEphemeralStagingDatabase();
+      try {
+        const steps = [
+          TtqlPlannedStep(
+            stepId: 'step_0',
+            stageIndex: 0,
+            connectionId: 'yb',
+            engineType: DbEngineType.yugabytedb,
+            targetTableOrCollection: 'order_settlements',
+            projectedColumns: ['order_id', 'settled_amount'],
+            stagingTableName: 'ttql_stage_0_order_settlements',
+            entityAlias: 'y',
+          ),
+        ];
+
+        staging.insertStagingRows('ttql_stage_0_order_settlements', [
+          {'order_id': 'ord_904', 'settled_amount': '84.20'},
+          {'order_id': 'ord_902', 'settled_amount': '49.99'},
+          {'order_id': 'ord_903', 'settled_amount': '389.00'},
+          {'order_id': 'ord_906', 'settled_amount': '19.95'},
+          {'order_id': 'ord_901', 'settled_amount': '129.50'},
+          {'order_id': 'ord_905', 'settled_amount': '1250.00'},
+        ]);
+
+        final rows = staging.executeFinalSyntheticJoin(
+          steps,
+          orderBys: const [
+            TtqlOrderByNode(fieldName: 'settled_amount', direction: 'DESC', entityAlias: 'y'),
+          ],
+          projections: const [
+            TtqlColumnProjection(entityAlias: 'y', columnName: 'order_id'),
+            TtqlColumnProjection(entityAlias: 'y', columnName: 'settled_amount'),
+          ],
+        );
+
+        expect(
+          rows.map((r) => r['order_id']).toList(),
+          equals(['ord_905', 'ord_903', 'ord_901', 'ord_904', 'ord_902', 'ord_906']),
+        );
+        expect(
+          rows.map((r) => r['settled_amount']).toList(),
+          equals([1250.0, 389.0, 129.5, 84.2, 49.99, 19.95]),
+        );
+      } finally {
+        staging.dispose();
+      }
+    });
+
+    test('TtqlEngine: Enforces joined-stage constant WHERE predicate (event_type == eventType) in synthetic join', () async {
+      final provider = CliConnectionProvider()
+        ..registerConnection(
+          id: 'ecommerce_pg',
+          name: 'Postgres Ecommerce',
+          engineType: DbEngineType.postgres,
+          connectionString: 'postgres://localhost/ecommerce',
+          schemaOverview: {'customers': ['customer_id', 'full_name']},
+          mockData: [
+            {'customer_id': 'cust_101', 'full_name': 'Alice Vance'},
+            {'customer_id': 'cust_103', 'full_name': 'Carol Danvers'},
+            {'customer_id': 'cust_105', 'full_name': 'Emma Watson'},
+          ],
+        )
+        ..registerConnection(
+          id: 'analytics_mongo',
+          name: 'Mongo Analytics',
+          engineType: DbEngineType.mongodb,
+          connectionString: 'mongodb://localhost/analytics',
+          schemaOverview: {'user_activity_logs': ['customer_id', 'event_type', 'platform']},
+          mockData: [
+            {'customer_id': 'cust_101', 'event_type': 'checkout_completed', 'platform': 'desktop_windows'},
+            {'customer_id': 'cust_103', 'event_type': 'add_to_cart', 'platform': 'ios'},
+            {'customer_id': 'cust_105', 'event_type': 'item_reviewed', 'platform': 'android'},
+          ],
+        );
+
+      const script = '''
+const pg = environment.connections.ecommerce_pg;
+const mongo = environment.connections.analytics_mongo;
+const eventType = 'checkout_completed';
+
+from(pg.customers as c)
+  .innerJoin(mongo.user_activity_logs as l, on: c.customer_id == l.customer_id)
+  .where(l.event_type == eventType)
+  .select([
+    c.customer_id,
+    c.full_name,
+    l.event_type,
+    l.platform
+  ]);
+''';
+
+      final result = await TtqlEngine(connectionProvider: provider).executeScript(script);
+      expect(result.totalRowCount, equals(1));
+      expect(result.rows.first['customer_id'], equals('cust_101'));
+      expect(result.rows.first['event_type'], equals('checkout_completed'));
+    });
   });
 }
 
