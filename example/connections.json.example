@@ -18,10 +18,10 @@
       "engine": "mysql",
       "connectionString": "mysql://${MYSQL_USER}:${MYSQL_PASS}@localhost:3306/inventory",
       "schemaOverview": {
-        "shipments": ["shipment_id", "order_id", "customer_id"]
+        "shipments": ["shipment_id", "order_id", "customer_id", "status"]
       },
       "mockData": [
-        {"shipment_id": "shp_99", "order_id": "ord_55", "customer_id": "cust_101"}
+        {"shipment_id": "shp_99", "order_id": "ord_55", "customer_id": "cust_101", "status": "shipped"}
       ]
     }
   ]
