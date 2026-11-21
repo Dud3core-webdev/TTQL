@@ -2,6 +2,11 @@
 
 All notable changes to the `ttql` package are documented in this file.
 
+## 1.0.1
+
+- **Documentation & Package Metadata**: Updated `pubspec.yaml`, `README.md`, `CONTRIBUTING.md`, and VS Code extension metadata to point to `https://docs.tabletalkapp.net/`, `https://docs.tabletalkapp.net/docs`, and `https://github.com/Dud3core-webdev/TTQL`.
+- **Example Config Fix**: Added missing `status` field to `shipments` mock schema/data in `example/connections.json.example`.
+
 ## 1.0.0
 
 - **Initial Release**: Pure Dart federated query engine and AST parser for analytical queries across multiple databases.
