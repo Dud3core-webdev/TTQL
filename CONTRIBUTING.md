@@ -14,8 +14,8 @@ Thank you for contributing to TTQL. We welcome issues, documentation improvement
 ### Setup
 
 ```bash
-git clone https://github.com/tabletalk-io/ttql.git
-cd ttql
+git clone https://github.com/Dud3core-webdev/TTQL.git
+cd TTQL
 dart pub get
 ```
 
@@ -60,4 +60,4 @@ When submitting code to `ttql`, adhere to the following project conventions:
 1. **Branching**: Create a feature branch off `main` (`git checkout -b feature/my-feature`).
 2. **Tests**: Add corresponding unit tests in `test/` for new parser rules, planner logic, or CLI features.
 3. **Commit Messages**: Write clear, descriptive commit messages.
-4. **Pull Request**: Open a pull request against `tabletalk-io/ttql` explaining the changes and how they were tested.
+4. **Pull Request**: Open a pull request against `Dud3core-webdev/TTQL` explaining the changes and how they were tested.

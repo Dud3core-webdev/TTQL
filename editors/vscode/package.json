@@ -9,14 +9,14 @@
     "vscode": "^1.75.0"
   },
   "license": "MIT",
-  "homepage": "https://tabletalk.io",
+  "homepage": "https://docs.tabletalkapp.net/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tabletalk-io/ttql.git",
+    "url": "https://github.com/Dud3core-webdev/TTQL.git",
     "directory": "editors/vscode"
   },
   "bugs": {
-    "url": "https://github.com/tabletalk-io/ttql/issues"
+    "url": "https://github.com/Dud3core-webdev/TTQL/issues"
   },
   "keywords": [
     "ttql",

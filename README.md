@@ -1,6 +1,6 @@
 # TTQL (TableTalk Query Language)
 
-[![Dart CI](https://github.com/tabletalk-io/ttql/actions/workflows/ci.yml/badge.svg)](https://github.com/tabletalk-io/ttql/actions/workflows/ci.yml)
+[![Dart CI](https://github.com/Dud3core-webdev/TTQL/actions/workflows/ci.yml/badge.svg)](https://github.com/Dud3core-webdev/TTQL/actions/workflows/ci.yml)
 [![pub package](https://img.shields.io/pub/v/ttql.svg)](https://pub.dev/packages/ttql)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -19,9 +19,9 @@ from(pg.customers as c)
   .limit(25);
 ```
 
-> **Official Visual Client & Local-AI Workspace — [TableTalk Studio](https://tabletalk.io)**
+> **Official Visual Client & Local-AI Workspace — [TableTalk Studio](https://docs.tabletalkapp.net/)**
 >
-> `ttql` is 100% open source (CLI, LSP server, VS Code extension, and Dart compiler library). When you want a turnkey desktop/mobile GUI built around TTQL — featuring **OS Keychain credential vaulting**, **1-click Server Pool discovery**, **visual cross-DB ERD graphs**, and **local Ollama AI query generation & `EXPLAIN ANALYZE` profiling** — check out [TableTalk Studio](https://tabletalk.io).
+> `ttql` is 100% open source (CLI, LSP server, VS Code extension, and Dart compiler library). When you want a turnkey desktop/mobile GUI built around TTQL — featuring **OS Keychain credential vaulting**, **1-click Server Pool discovery**, **visual cross-DB ERD graphs**, and **local Ollama AI query generation & `EXPLAIN ANALYZE` profiling** — check out [TableTalk Studio](https://docs.tabletalkapp.net/).
 
 ---
 
@@ -37,6 +37,7 @@ from(pg.customers as c)
 
 ## 📚 Documentation
 
+- 🌐 **[Online Documentation Portal](https://docs.tabletalkapp.net/docs)**: Official TableTalk & TTQL guides, tutorials, and interactive examples.
 - ⚡ **[Developer Syntax Guide](doc/SYNTAX_GUIDE.md)**: Rich, developer-friendly cheat sheet, pipeline diagrams, operators, and copy-paste recipes.
 - 📖 **[Official Language Manual & Specification](doc/TTQL_LANGUAGE_MANUAL.md)**: Comprehensive reference manual, pushdown mechanics, and formal EBNF grammar.
 - 🏛️ **[Compiler Architecture Wiki](TTQL_COMPILER_WIKI.md)**: Deep dive into the frontend compiler, DAG optimizer, and ephemeral staging engine.
@@ -52,8 +53,8 @@ dart pub global activate ttql
 ### From Source
 
 ```bash
-git clone https://github.com/tabletalk-io/ttql.git
-cd ttql
+git clone https://github.com/Dud3core-webdev/TTQL.git
+cd TTQL
 dart pub get
 ```
 
