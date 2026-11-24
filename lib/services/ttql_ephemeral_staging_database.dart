@@ -83,6 +83,7 @@ class TtqlEphemeralStagingDatabase {
       } catch (_) {}
       throw TtqlExecutionException('Failed to insert rows into ephemeral SQLite staging table "$tableName"', cause: e);
     } finally {
+      // ignore: deprecated_member_use
       statement.dispose();
     }
   }
@@ -472,6 +473,7 @@ class TtqlEphemeralStagingDatabase {
   }
 
   void dispose() {
+    // ignore: deprecated_member_use
     _db?.dispose();
     _db = null;
     _stagedRowCounts.clear();

@@ -185,6 +185,7 @@ class CliConnectionProvider implements TtqlConnectionProvider {
       }
       return rows;
     } finally {
+      // ignore: deprecated_member_use
       db.dispose();
     }
   }

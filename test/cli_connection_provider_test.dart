@@ -71,6 +71,8 @@ void main() {
       final db = sqlite3.open(dbFile.path);
       db.execute('CREATE TABLE items (sku TEXT PRIMARY KEY, qty INTEGER);');
       db.execute("INSERT INTO items VALUES ('SKU-99', 15);");
+      // Keep dispose() for compatibility with sqlite3 2.x and 3.x.
+      // ignore: deprecated_member_use
       db.dispose();
 
       try {

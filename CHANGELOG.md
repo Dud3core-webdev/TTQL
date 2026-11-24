@@ -2,6 +2,10 @@
 
 All notable changes to the `ttql` package are documented in this file.
 
+## 1.0.3
+
+- **Dependency Compatibility**: Widened `sqlite3` version constraint to `>=2.4.0 <4.0.0` to support `sqlite3` 3.x alongside 2.x.
+
 ## 1.0.2
 
 - **Server Pool Discovery Metadata**: Updated `DbEngineType.supportsServerPoolDiscovery` to include networked `redis` servers (logical DB discovery) and exclude embedded single-file `duckdb` alongside `sqlite`.
