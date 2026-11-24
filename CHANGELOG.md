@@ -2,6 +2,10 @@
 
 All notable changes to the `ttql` package are documented in this file.
 
+## 1.0.2
+
+- **Server Pool Discovery Metadata**: Updated `DbEngineType.supportsServerPoolDiscovery` to include networked `redis` servers (logical DB discovery) and exclude embedded single-file `duckdb` alongside `sqlite`.
+
 ## 1.0.1
 
 - **Documentation & Package Metadata**: Updated `pubspec.yaml`, `README.md`, `CONTRIBUTING.md`, and VS Code extension metadata to point to `https://docs.tabletalkapp.net/`, `https://docs.tabletalkapp.net/docs`, and `https://github.com/Dud3core-webdev/TTQL`.

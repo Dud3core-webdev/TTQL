@@ -26,9 +26,9 @@ enum DbEngineType {
     this.defaultPort,
   });
 
-  /// True if engine supports multi-database server catalog discovery.
+  /// True if engine is a networked server supporting multi-database/keyspace/logical-DB discovery.
   bool get supportsServerPoolDiscovery {
-    return this != DbEngineType.sqlite && this != DbEngineType.redis;
+    return this != DbEngineType.sqlite && this != DbEngineType.duckdb;
   }
 
   /// Map an integer ID back to the matching [DbEngineType].
